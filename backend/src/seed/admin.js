@@ -1,0 +1,3 @@
+const mongoose=require('mongoose'); const cfg=require('../config'); const User=require('../models/User');
+(async function(){ await mongoose.connect(cfg.mongoUri); const count=await User.countDocuments({}).exec(); if(count>0){ console.log('Users already exist. No action.'); process.exit(0); }
+  const username=process.env.ADMIN_USERNAME||'admin'; const password=process.env.ADMIN_PASSWORD||'admin123'; const u=await User.createWithPassword(username,password,'admin'); console.log('Admin created:', u.username); process.exit(0); })().catch(e=>{ console.error(e); process.exit(1); });
