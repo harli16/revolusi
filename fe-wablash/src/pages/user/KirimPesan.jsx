@@ -258,7 +258,27 @@ export default function KirimPesan() {
         intervalRef.current = null;
       };
     }, [blastId, token, setCurrentBlast]);
+  
+  // helper: sama seperti backend
+  const normalizePhone = (raw) => {
+    if (!raw) return "";
+    let p = String(raw).trim().replace(/\D/g, "");
+    if (p.startsWith("62")) return p;
+    if (p.startsWith("0")) return "62" + p.slice(1);
+    if (p.startsWith("8")) return "62" + p;
+    return p;
+  };
 
+  // index penerima by phone → buat lookup cepat (nama, sekolah)
+  const recipientsIndexRef = useRef(new Map());
+  useEffect(() => {
+    const map = new Map();
+    (recipients || []).forEach(r => {
+      const key = normalizePhone(r.phone || r.number);
+      if (key) map.set(key, r);
+    });
+    recipientsIndexRef.current = map;
+  }, [recipients]);
   // socket listener
   useEffect(() => {
     if (!socket) return;
@@ -269,42 +289,50 @@ export default function KirimPesan() {
       delivered: 2,
       read: 3,
       played: 4,
-      failed: 99,
+      failed: 100,
     };
 
-    // simpan status terakhir untuk setiap nomor
+    // status terakhir per nomor
     const recipientStatus = new Map();
 
-    const handleStatus = (data) => {
-      const status = data.status;
-      const phone = data.phone || "-";
+    const statusLabel = {
+      sent: "terkirim",
+      delivered: "sudah diterima",
+      read: "sudah dibaca",
+      played: "media diputar",
+      failed: "gagal",
+    };
 
-      // update status terakhir berdasarkan prioritas
-      const prevStatus = recipientStatus.get(phone);
-      if (!prevStatus || statusPriority[status] > statusPriority[prevStatus]) {
-        recipientStatus.set(phone, status);
+    const handleStatus = (data) => {
+      // 1) normalisasi & validasi phone
+      const phoneNorm = normalizePhone(data.phone || data.to || "");
+      if (!phoneNorm) return;                           // 🔒 skip event tanpa nomor
+      if (!recipientsIndexRef.current.has(phoneNorm)) { // 🔒 skip kalau bukan bagian blast ini
+        return;
       }
 
-      // update log realtime
-      const statusLabel = {
-        sent: "terkirim",
-        delivered: "sudah diterima",
-        read: "sudah dibaca",
-        played: "media diputar",
-        failed: "gagal",
-      };
+      const status = (data.status || "").toLowerCase();
+      const prev = recipientStatus.get(phoneNorm);
+      if (!prev || statusPriority[status] >= statusPriority[prev]) {
+        recipientStatus.set(phoneNorm, status);
+      }
+
+      // 2) ambil meta penerima dari index (biar ada nama & sekolah)
+      const rec = recipientsIndexRef.current.get(phoneNorm);
+
+      // 3) update log (hindari duplikasi nomor+status)
 
       setBlastLogs((prev) => {
         const exists = prev.some(
-          (l) => l.number === phone && l.status === statusLabel[status]
+          (l) => l.number === phoneNorm && l.status === statusLabel[status]
         );
         if (exists) return prev;
-
         return [
           ...prev,
           {
-            name: data.name || "-",
-            number: phone,
+            name: rec?.name || data.name || "-",
+            number: phoneNorm,
+            school: rec?.school || data.school || "",
             status: statusLabel[status] || status,
           },
         ];
@@ -315,27 +343,17 @@ export default function KirimPesan() {
         if (!prev) return prev;
         const updated = { ...prev };
 
-        let sent = 0,
-          delivered = 0,
-          read = 0,
-          played = 0,
-          failed = 0;
-
-        recipientStatus.forEach((s) => {
+        let sent = 0, delivered = 0, read = 0, played = 0, failed = 0;
+        recipientStatus.forEach((s, num) => {
+          if (!recipientsIndexRef.current.has(num)) return;
           if (s === "failed") {
             failed++;
           } else if (s === "played") {
-            played++;
-            read++;
-            delivered++;
-            sent++;
+            played++; read++; delivered++; sent++;
           } else if (s === "read") {
-            read++;
-            delivered++;
-            sent++;
+            read++; delivered++; sent++;
           } else if (s === "delivered") {
-            delivered++;
-            sent++;
+            delivered++; sent++;
           } else if (s === "sent") {
             sent++;
           }
@@ -346,10 +364,14 @@ export default function KirimPesan() {
         updated.read = read;
         updated.played = played;
         updated.failed = failed;
-        updated.current = recipientStatus.size;
+
+        const uniqueCount = Array.from(recipientStatus.keys())
+          .filter((num) => recipientsIndexRef.current.has(num)).length;
+
+        updated.current = uniqueCount;
         updated.progress = Math.min(
           100,
-          Math.round((updated.current / (updated.total || 1)) * 100)
+          Math.round((uniqueCount / (updated.total || 1)) * 100)
         );
         return updated;
       });
@@ -357,7 +379,7 @@ export default function KirimPesan() {
 
     socket.on("message:status", handleStatus);
     return () => socket.off("message:status", handleStatus);
-  }, [socket]);
+  }, [socket, recipients, setCurrentBlast, setBlastLogs]);
 
   // send blast
   const handleSend = async () => {
@@ -365,8 +387,8 @@ export default function KirimPesan() {
       alert("⚠️ WhatsApp belum terhubung!");
       return;
     }
-    if (!message && !attachment) {
-      alert("Pesan atau file wajib diisi!");
+    if (!attachment && !message && (!randomTemplate || selectedTemplates.length === 0)) {
+      alert("Harus isi pesan manual ATAU pilih template acak ATAU upload file!");
       return;
     }
     if (recipients.length === 0) {
@@ -400,7 +422,9 @@ export default function KirimPesan() {
           orangtua: r.orangtua || "",
           birthdate: r.birthdate || "",
         })),
-        templates: [message],
+        templates: randomTemplate
+          ? templates.filter((tpl) => selectedTemplates.includes(tpl._id)).map((tpl) => tpl.message)
+          : [message],
         delayMin: randomDelay ? minDelay : delay,
         delayMax: randomDelay ? maxDelay : delay,
         pauseEvery,
@@ -408,10 +432,15 @@ export default function KirimPesan() {
         maxPerBatch,
         maxPerDay,
         content: { text: message, mediaUrl, mimetype },
+        randomTemplate,
+        randomMode,
+        perN,
+        selectedTemplates,
       }, { headers: { Authorization: `Bearer ${token}` } });
 
 
       if (data.ok) {
+        console.log("🚀 Blast ID:", data.blastId);
         setBlastId(data.blastId);
         localStorage.setItem("currentBlastId", data.blastId);
       }
@@ -557,6 +586,11 @@ export default function KirimPesan() {
       textarea.selectionEnd = start + wrapped.length;
     }, 0);
   };
+  // random template config
+  const [randomTemplate, setRandomTemplate] = useState(false);
+  const [randomMode, setRandomMode] = useState("per_message");
+  const [perN, setPerN] = useState(5);
+  const [selectedTemplates, setSelectedTemplates] = useState([]);
 
   
   return (
@@ -781,51 +815,35 @@ export default function KirimPesan() {
                 {currentBlast.current}/{currentBlast.total} selesai
               </p>
               <p className="text-sm mt-1">{currentBlast.statusText}</p>
-              {/* Breakdown totals */}
-              {currentBlast?.blastId && (
-                <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
-                  {/* Sent */}
-                  <div className="flex items-center gap-3 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg shadow-sm">
-                    <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full bg-gray-200 text-gray-700">
-                      ✅
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Total pesan dikirim</p>
-                      <p className="text-lg font-semibold text-gray-800">{currentBlast.sent || 0}</p>
-                    </div>
-                  </div>
-
-                  {/* Read */}
-                  <div className="flex items-center gap-3 p-4 bg-green-50 dark:bg-green-700 rounded-lg shadow-sm">
-                    <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full bg-blue-200 text-blue-700">
-                      👁️
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Total pesan terkirim</p>
-                      <p className="text-lg font-semibold text-blue-800">{currentBlast.read || 0}</p>
-                    </div>
-                  </div>
-
-                  {/* Played */}
-                  <div className="flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-700 rounded-lg shadow-sm">
-                    <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full bg-blue-200 text-blue-700">
-                      👁️
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Total pesan dibaca</p>
-                      <p className="text-lg font-semibold text-blue-800">{currentBlast.played || 0}</p>
-                    </div>
-                  </div>
-
-                  {/* Failed */}
-                  <div className="flex items-center gap-3 p-4 bg-red-50 dark:bg-red-700 rounded-lg shadow-sm">
-                    <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full bg-red-200 text-red-700">
-                      ❌
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Pesan gagal terkirim</p>
-                      <p className="text-lg font-semibold text-red-800">{currentBlast.failed || 0}</p>
-                    </div>
+              {/* Log pengiriman realtime */}
+              {blastLogs.length > 0 && (
+                <div className="mt-4 border-t pt-3">
+                  <h4 className="font-semibold mb-2 text-sm text-gray-700">Aktivitas Pengiriman</h4>
+                  <div className="max-h-40 overflow-y-auto text-sm space-y-1">
+                    {blastLogs.slice(-10).reverse().map((log, idx) => (
+                      <div
+                        key={idx}
+                        className={`flex items-center justify-between p-2 rounded ${
+                          log.status === "gagal"
+                            ? "bg-red-50 text-red-700"
+                            : "bg-green-50 text-green-700"
+                        }`}
+                      >
+                        <div className="flex-1">
+                          <p className="font-medium">
+                            Sedang mengirim pesan ke{" "}
+                            <span className="text-gray-800 font-semibold">{log.number}</span>{" "}
+                            - {log.name}
+                          </p>
+                          {log.school && (
+                            <p className="text-xs text-gray-500 mt-0.5">{log.school}</p>
+                          )}
+                        </div>
+                        <div className="flex-shrink-0 ml-2 text-xs font-bold uppercase">
+                          {log.status}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -868,8 +886,9 @@ export default function KirimPesan() {
               )}
             </div>
             {/* Delay Settings */}
-            <div>
+            <div className={`relative ${currentBlast?.blastId && currentBlast?.status === "active" ? "opacity-60 pointer-events-none" : ""}`}>
               <label className="block text-sm font-medium">Delay per Pesan</label>
+
               {/* Checkbox Random Delay */}
               <div className="mt-2 flex items-center gap-2">
                 <input
@@ -877,6 +896,7 @@ export default function KirimPesan() {
                   id="randomDelay"
                   checked={randomDelay}
                   onChange={(e) => setRandomDelay(e.target.checked)}
+                  disabled={currentBlast?.blastId && currentBlast?.status === "active"}
                 />
                 <label htmlFor="randomDelay" className="text-sm">Aktifkan Random Delay</label>
               </div>
@@ -888,6 +908,7 @@ export default function KirimPesan() {
                   min={1}
                   onChange={(e) => setDelay(Number(e.target.value))}
                   className="mt-2 block w-full border rounded-md p-2"
+                  disabled={currentBlast?.blastId && currentBlast?.status === "active"}
                 />
               )}
 
@@ -900,6 +921,7 @@ export default function KirimPesan() {
                     onChange={(e) => setMinDelay(Number(e.target.value))}
                     className="w-20 border rounded p-2"
                     placeholder="Min"
+                    disabled={currentBlast?.blastId && currentBlast?.status === "active"}
                   />
                   <input
                     type="number"
@@ -908,6 +930,7 @@ export default function KirimPesan() {
                     onChange={(e) => setMaxDelay(Number(e.target.value))}
                     className="w-20 border rounded p-2"
                     placeholder="Max"
+                    disabled={currentBlast?.blastId && currentBlast?.status === "active"}
                   />
                 </div>
               )}
@@ -923,7 +946,7 @@ export default function KirimPesan() {
             </div>
 
             {/* Anti-ban Settings */}
-            <div className="mt-4 space-y-3">
+            <div className={`mt-4 space-y-3 ${currentBlast?.blastId && currentBlast?.status === "active" ? "opacity-60 pointer-events-none" : ""}`}>
               <div>
                 <label className="block text-sm font-medium">Pause Every</label>
                 <input
@@ -931,6 +954,7 @@ export default function KirimPesan() {
                   value={pauseEvery}
                   onChange={(e) => setPauseEvery(Number(e.target.value))}
                   className="mt-1 block w-full border rounded-md p-2"
+                  disabled={currentBlast?.blastId && currentBlast?.status === "active"}
                 />
                 <p className="text-xs text-gray-500">Berhenti setiap {pauseEvery} pesan</p>
               </div>
@@ -942,6 +966,7 @@ export default function KirimPesan() {
                   value={pauseDuration}
                   onChange={(e) => setPauseDuration(Number(e.target.value))}
                   className="mt-1 block w-full border rounded-md p-2"
+                  disabled={currentBlast?.blastId && currentBlast?.status === "active"}
                 />
               </div>
 
@@ -952,6 +977,7 @@ export default function KirimPesan() {
                   value={maxPerBatch}
                   onChange={(e) => setMaxPerBatch(Number(e.target.value))}
                   className="mt-1 block w-full border rounded-md p-2"
+                  disabled={currentBlast?.blastId && currentBlast?.status === "active"}
                 />
               </div>
 
@@ -962,21 +988,114 @@ export default function KirimPesan() {
                   value={maxPerDay}
                   onChange={(e) => setMaxPerDay(Number(e.target.value))}
                   className="mt-1 block w-full border rounded-md p-2"
+                  disabled={currentBlast?.blastId && currentBlast?.status === "active"}
                 />
               </div>
+            </div>
+
+            {/* Random Template Settings */}
+            <div className={`mt-4 space-y-3 border-t pt-3 ${currentBlast?.blastId && currentBlast?.status === "active" ? "opacity-60 pointer-events-none" : ""}`}>
+              <label className="block text-sm font-medium">Random Template</label>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="randomTemplate"
+                  checked={randomTemplate}
+                  onChange={(e) => setRandomTemplate(e.target.checked)}
+                  disabled={currentBlast?.blastId && currentBlast?.status === "active"}
+                />
+                <label htmlFor="randomTemplate" className="text-sm">Aktifkan Random Template</label>
+              </div>
+
+              {randomTemplate && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium">Mode Random</label>
+                    <select
+                      value={randomMode}
+                      onChange={(e) => setRandomMode(e.target.value)}
+                      className="mt-1 block w-full border rounded-md p-2"
+                      disabled={currentBlast?.blastId && currentBlast?.status === "active"}
+                    >
+                      <option value="per_message">Per Pesan (acak tiap pesan)</option>
+                      <option value="per_n">Per N Pesan</option>
+                    </select>
+                  </div>
+
+                  {randomMode === "per_n" && (
+                    <div>
+                      <label className="block text-sm font-medium">Ganti setiap N pesan</label>
+                      <input
+                        type="number"
+                        value={perN}
+                        min={1}
+                        onChange={(e) => setPerN(Number(e.target.value))}
+                        className="mt-1 block w-full border rounded-md p-2"
+                        disabled={currentBlast?.blastId && currentBlast?.status === "active"}
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-medium">Pilih Template Acak</label>
+                    <div className="mt-1 max-h-32 overflow-y-auto border rounded-md p-2 space-y-1">
+                      {templates.length === 0 ? (
+                        <p className="text-gray-500 text-sm">Belum ada template tersimpan.</p>
+                      ) : (
+                        templates.map((tpl) => (
+                          <label key={tpl._id} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedTemplates.includes(tpl._id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedTemplates([...selectedTemplates, tpl._id]);
+                                } else {
+                                  setSelectedTemplates(selectedTemplates.filter((id) => id !== tpl._id));
+                                }
+                              }}
+                              disabled={currentBlast?.blastId && currentBlast?.status === "active"}
+                            />
+                            <span className="text-sm">{tpl.title || tpl.message.slice(0, 40)}...</span>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Buttons */}
             <div className="flex space-x-3 pt-4">
               <button
                 onClick={handleSend}
-                disabled={currentBlast?.loading || !waConnected}
-                className="w-full flex justify-center py-2 px-4 rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+                disabled={
+                  currentBlast?.loading ||
+                  !waConnected ||
+                  (currentBlast?.blastId && currentBlast?.status === "active")
+                }
+                className={`w-full flex justify-center py-2 px-4 rounded-md text-white ${
+                  currentBlast?.blastId && currentBlast?.status === "active"
+                    ? "bg-gray-400 cursor-not-allowed"
+                    : "bg-indigo-600 hover:bg-indigo-700"
+                }`}
               >
                 <Send className="w-4 h-4 mr-2" />
-                {currentBlast?.loading ? "Mengirim..." : waConnected ? "Kirim Sekarang" : "WA Belum Terhubung"}
+                {currentBlast?.blastId && currentBlast?.status === "active"
+                  ? "Sedang Mengirim..."
+                  : currentBlast?.loading
+                  ? "Mengirim..."
+                  : waConnected
+                  ? "Kirim Sekarang"
+                  : "WA Belum Terhubung"}
               </button>
-              <button className="w-full flex justify-center py-2 px-4 border rounded-md text-gray-700 bg-white hover:bg-gray-50">
+
+              <button
+                className="w-full flex justify-center py-2 px-4 border rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                disabled={currentBlast?.blastId && currentBlast?.status === "active"}
+              >
                 <Save className="w-4 h-4 mr-2" /> Simpan Draft
               </button>
             </div>

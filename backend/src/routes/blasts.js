@@ -13,16 +13,78 @@ const { toTitleCase } = require("../utils/string");
 const queue = require("../services/queue");
 
 // =========================
-// Utils
+// Utils: Random Template (PATCHED)
 // =========================
-function pickMessage(templates, recipient, fallbackText) {
-  let msg;
-  if (templates && templates.length > 0) {
-    msg = templates[Math.floor(Math.random() * templates.length)];
-  } else {
-    msg = fallbackText || "";
+function pickMessage(templates, recipient, fallbackText, opts = {}) {
+  if (!templates || templates.length === 0) {
+    return applyPlaceholders(fallbackText || "", recipient);
   }
-  return applyPlaceholders(msg, recipient);
+
+  const { randomEnabled, mode, perN, selectedTemplates, index } = opts;
+
+  // 🔧 Normalisasi sumber template
+  // - Jika templates adalah array string => anggap sudah dipre-filter oleh FE
+  // - Jika templates berisi objek => boleh filter dgn selectedTemplates (ID / text)
+  let sourceTemplates = templates;
+
+  if (
+    Array.isArray(selectedTemplates) &&
+    selectedTemplates.length > 0 &&
+    typeof templates[0] === "object"
+  ) {
+    const selectedSet = new Set(selectedTemplates.map(String));
+    sourceTemplates = templates.filter((t) => {
+      const key =
+        (t && t._id && String(t._id)) ||
+        (t && t.id && String(t.id)) ||
+        (t && t.text) ||
+        (t && t.message) ||
+        String(t);
+      return selectedSet.has(key);
+    });
+  }
+
+  // kalau setelah filter kosong, fallback ke templates awal
+  if (!sourceTemplates || sourceTemplates.length === 0) {
+    sourceTemplates = templates;
+  }
+
+  // ambil string pesan dari entry (objek/teks)
+  const getText = (tpl) => {
+    if (typeof tpl === "string") return tpl;
+    if (!tpl || typeof tpl !== "object") return "";
+    return tpl.text || tpl.message || String(tpl);
+  };
+
+  let chosen = "";
+
+  if (randomEnabled) {
+    if (mode === "per_n" && perN > 0) {
+      const blockIndex =
+        Math.floor((index || 0) / perN) % sourceTemplates.length;
+      chosen = getText(sourceTemplates[blockIndex]);
+    } else if (mode === "per_message") {
+      chosen = getText(
+        sourceTemplates[
+          Math.floor(Math.random() * sourceTemplates.length)
+        ]
+      );
+    } else {
+      chosen = getText(
+        sourceTemplates[
+          Math.floor(Math.random() * sourceTemplates.length)
+        ]
+      );
+    }
+  } else {
+    chosen = getText(sourceTemplates[0]);
+  }
+
+  if (!chosen || String(chosen).trim() === "") {
+    chosen = fallbackText || "";
+  }
+
+  return applyPlaceholders(chosen, recipient);
 }
 
 // ===========================
@@ -267,6 +329,7 @@ router.post("/", authenticateToken, async (req, res) => {
         failed: 0,
         delivered: 0,
         read: 0,
+        cancelled: 0,
       },
       delayMin,
       delayMax,
@@ -276,87 +339,138 @@ router.post("/", authenticateToken, async (req, res) => {
       maxPerDay,
       schedule: schedule ? new Date(schedule) : null,
       meta: {
-        ip: req.ip,
-        userAgent: req.headers["user-agent"],
+        ip: req.ip || "unknown",
+        userAgent: req.headers["user-agent"] || "unknown",
+        randomTemplate: Boolean(req.body?.randomTemplate),
+        randomMode: ["per_message", "per_n"].includes(req.body?.randomMode)
+          ? req.body.randomMode
+          : "per_message",
+        perN: Number(req.body?.perN) > 0 ? Number(req.body.perN) : 0,
+        selectedTemplates: Array.isArray(req.body?.selectedTemplates)
+          ? req.body.selectedTemplates
+          : [],
+        // otomatis biar keliatan rapih di DB & FE
+        summary: Boolean(req.body?.randomTemplate)
+          ? `Mode: ${req.body?.randomMode || "per_message"}, perN: ${
+              req.body?.perN || 0
+            }, Templates: ${(req.body?.selectedTemplates || []).length}`
+          : "Random nonaktif",
       },
+    });
+    console.log("🚀 [NEW BLAST]", {
+      user: req.user.username || req.user.id,
+      id: blast._id.toString(),
+      totalRecipients: recipients.length,
+      queued: batchRecipients.length,
+      pending: deferredRecipients.length,
+      random: blast.meta?.randomTemplate
+        ? `${blast.meta.randomMode} (perN=${blast.meta.perN})`
+        : "off",
+      templates: templates?.length || 0,
     });
 
     if (!schedule) {
-      for (const rec of batchRecipients) {
-        const msg = pickMessage(templates, rec, content?.text);
+    // 🔧 ambil opsi random template dari FE (opsional)
+    const randomEnabled = req.body?.randomTemplate === true;                 // boolean
+    const randomMode = req.body?.randomMode || "per_message";                // "per_message" | "per_n"
+    const perN = Number(req.body?.perN || 0);                                // angka untuk mode per_n
+    const selectedTemplates = Array.isArray(req.body?.selectedTemplates)     // subset template yg dicentang
+      ? req.body.selectedTemplates
+      : [];
 
-        const log = await MessageLog.create({
-          userId: req.user.id,
-          blastId: blast._id,
-          to: rec.phone,
-          recipientName: rec.name,
-          message: msg,
-          mediaUrl: content?.mediaUrl || null,
-          status: "queued",
-          createdAt: new Date(),
-        });
-
-        // ✅ Simpan ke Contacts biar LiveChat bisa ambil nama + sekolah + kelas
-        await Contact.updateOne(
-          { userId: req.user.id, waNumber: rec.phone }, // cari kontak existing
-          {
-            $set: {
-              name: toTitleCase(rec.name || rec.phone), // 🔥 nama konsisten Title Case
-              school: (rec.school || "").toUpperCase(), // tetap CAPS
-              kelas: (rec.kelas || "").toUpperCase(),   // tetap CAPS
-              updatedAt: new Date(),
-            },
-            $setOnInsert: { createdAt: new Date() },
-          },
-          { upsert: true }
-        );
-
-        if (content?.mediaUrl) {
-          const filePath = path.join(__dirname, "..", "uploads", content.mediaUrl);
-          const fileBuf = fs.readFileSync(filePath);
-
-          queue.addJob({
-            type: "media",
-            userId: req.user.id,
-            to: rec.phone,
-            fileBuf,
-            mimetype: content?.mimetype || "application/octet-stream",
-            filename: content.mediaUrl,
-            caption: msg,
-            blastId: blast._id,
-            logId: log._id,
-            delay: {
-              mode: delayMin !== delayMax ? "random" : "fixed",
-              min: delayMin,
-              max: delayMax,
-              value: delayMin,
-            },
-            pauseEvery,
-            pauseDuration,
-            maxPerBatch,
-          });
-        } else {
-          queue.addJob({
-            type: "text",
-            userId: req.user.id,
-            to: rec.phone,
-            message: msg,
-            blastId: blast._id,
-            logId: log._id,
-            delay: {
-              mode: delayMin !== delayMax ? "random" : "fixed",
-              min: delayMin,
-              max: delayMax,
-              value: delayMin,
-            },
-            pauseEvery,
-            pauseDuration,
-            maxPerBatch,
-          });
+    // proses batch yg langsung dikirim (queued)
+    for (const [idx, rec] of batchRecipients.entries()) {
+      // 🎲 Pilih isi pesan sesuai mode random
+      const msg = pickMessage(
+        templates,
+        rec,
+        content?.text,
+        {
+          randomEnabled: req.body?.randomTemplate === true,
+          mode: req.body?.randomMode || "per_message", // bisa "per_message" atau "per_n"
+          perN: Number(req.body?.perN) || 0,
+          selectedTemplates: Array.isArray(req.body?.selectedTemplates)
+            ? req.body.selectedTemplates
+            : [],
+          index: idx, // index penerima di batch (penting untuk mode per_n)
         }
-      }
-    }
+      );
 
+      // 📝 Simpan log pesan
+      const log = await MessageLog.create({
+        userId: req.user.id,
+        blastId: blast._id,
+        to: rec.phone,
+        recipientName: rec.name,
+        message: msg,
+        mediaUrl: content?.mediaUrl || null,
+        status: "queued",
+        createdAt: new Date(),
+      });
+
+      // ✅ Update atau buat kontak baru
+      await Contact.updateOne(
+        { userId: req.user.id, waNumber: rec.phone },
+        {
+          $set: {
+            name: toTitleCase(rec.name || rec.phone),
+            school: (rec.school || "").toUpperCase(),
+            kelas: (rec.kelas || "").toUpperCase(),
+            updatedAt: new Date(),
+          },
+          $setOnInsert: { createdAt: new Date() },
+        },
+        { upsert: true }
+      );
+
+      // 🚀 Tambah job ke queue (media atau teks)
+      const jobBase = {
+        userId: req.user.id,
+        to: rec.phone,
+        blastId: blast._id,
+        logId: log._id,
+        delay: {
+          mode: delayMin !== delayMax ? "random" : "fixed",
+          min: delayMin,
+          max: delayMax,
+          value: delayMin,
+        },
+        pauseEvery,
+        pauseDuration,
+        maxPerBatch,
+      };
+
+      if (content?.mediaUrl) {
+        // === Kirim Media / Dokumen ===
+        const filePath = path.join(__dirname, "..", "uploads", content.mediaUrl);
+        const fileBuf = fs.readFileSync(filePath);
+
+        queue.addJob({
+          ...jobBase,
+          type: "media",
+          fileBuf,
+          mimetype: content?.mimetype || "application/octet-stream",
+          filename: content.mediaUrl,
+          caption: msg, // 🔥 caption ikut hasil random template
+        });
+      } else {
+        // === Kirim Pesan Teks ===
+        queue.addJob({
+          ...jobBase,
+          type: "text",
+          message: msg, // 🔥 isi pesan hasil random template
+        });
+      }
+
+      // 🔍 Optional log untuk debug
+      console.log(
+        `📨 [QUEUE ADD] to=${rec.phone}, mode=${req.body?.randomMode}, templatePreview="${msg.slice(0, 50)}..."`
+      );
+    }
+  }
+  console.log(
+    `🚀 [NEW BLAST] user=${req.user.username || req.user.id}, total=${recipients.length}, batch=${batchRecipients.length}, pending=${deferredRecipients.length}, random=${req.body?.randomTemplate}, mode=${req.body?.randomMode}`
+  );
     res.json({ ok: true, blastId: blast._id });
   } catch (e) {
     console.error("Blast create error:", e);
@@ -394,23 +508,49 @@ router.post("/:blastId/status", authenticateToken, async (req, res) => {
 });
 
 // ===========================
-// CONTINUE pending batch
+// CONTINUE pending batch (lanjutkan batch tertunda)
 // ===========================
 router.post("/continue/:blastId", authenticateToken, async (req, res) => {
   try {
     const blast = await Blast.findById(req.params.blastId);
-    if (!blast) return res.status(404).json({ ok: false, message: "Blast not found" });
-
-    const pendingRecipients = blast.recipients.filter((r) => r.status === "pending");
-
-    if (pendingRecipients.length === 0) {
-      return res.json({ ok: false, message: "Tidak ada recipients pending untuk dilanjutkan." });
+    if (!blast) {
+      return res.status(404).json({ ok: false, message: "Blast not found" });
     }
 
+    const pendingRecipients = blast.recipients.filter((r) => r.status === "pending");
+    if (pendingRecipients.length === 0) {
+      return res.json({
+        ok: false,
+        message: "Tidak ada recipients pending untuk dilanjutkan.",
+      });
+    }
+
+    // 🔥 Hitung berapa yang sudah terkirim sebelumnya
+    const prevCount = blast.recipients.filter((r) =>
+      ["sent", "delivered", "read", "played", "failed"].includes(r.status)
+    ).length;
+
+    console.log(
+      `▶️ [CONTINUE] Blast ${blast._id} | User=${blast.userId} | Mode=${blast.meta?.randomMode} | Pending=${pendingRecipients.length} | MulaiIndex=${prevCount}`
+    );
+
     let resumedCount = 0;
+    let index = prevCount;
 
     for (const rec of pendingRecipients) {
-      const msg = pickMessage(blast.templates, rec, blast.content?.text);
+      const msg = pickMessage(blast.templates, rec, blast.content?.text, {
+        randomEnabled: blast.meta?.randomTemplate || false,
+        mode: blast.meta?.randomMode || "per_message",
+        perN: blast.meta?.perN || 0,
+        selectedTemplates: blast.meta?.selectedTemplates || [],
+        index,
+      });
+
+      console.log(
+        `🎲 [RANDOM] index=${index}, mode=${blast.meta?.randomMode}, perN=${blast.meta?.perN}, to=${rec.phone}, templatePreview="${msg.slice(0, 60)}..."`
+      );
+
+      index++;
 
       const log = await MessageLog.create({
         userId: blast.userId,
@@ -421,6 +561,11 @@ router.post("/continue/:blastId", authenticateToken, async (req, res) => {
         status: "queued",
         createdAt: new Date(),
       });
+
+      // 🔧 Tambahan log tiap job dimasukkan ke queue
+      console.log(
+        `📨 [QUEUE ADD] to=${rec.phone}, jobType=${blast.content?.mediaUrl ? "media" : "text"}`
+      );
 
       queue.addJob({
         type: blast.content?.mediaUrl ? "media" : "text",
@@ -442,15 +587,22 @@ router.post("/continue/:blastId", authenticateToken, async (req, res) => {
 
       await Blast.updateOne(
         { _id: blast._id, "recipients.phone": rec.phone },
-        { $set: { "recipients.$.status": "queued", "recipients.$.timestamps.queuedAt": new Date() } }
+        {
+          $set: {
+            "recipients.$.status": "queued",
+            "recipients.$.timestamps.queuedAt": new Date(),
+          },
+        }
       );
 
       resumedCount++;
     }
 
+    console.log(`✅ [CONTINUE DONE] Blast ${blast._id} | TotalResumed=${resumedCount}`);
+
     res.json({ ok: true, resumed: resumedCount });
   } catch (err) {
-    console.error("Blast continue error:", err);
+    console.error("❌ Blast continue error:", err);
     res.status(500).json({ ok: false, message: err.message });
   }
 });

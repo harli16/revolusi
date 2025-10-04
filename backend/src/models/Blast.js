@@ -20,7 +20,7 @@ const RecipientSchema = new Schema(
         "read",
         "played",
         "failed",
-        "cancelled"
+        "cancelled",
       ],
       default: "queued",
     },
@@ -41,9 +41,30 @@ const RecipientSchema = new Schema(
   { _id: false }
 );
 
-// ================
+// ====================
+// Meta sub-schema (🔥 patch terbaru)
+// ====================
+const MetaSchema = new Schema(
+  {
+    ip: { type: String, default: "" },
+    userAgent: { type: String, default: "" },
+
+    // 🔥 konfigurasi random template
+    randomTemplate: { type: Boolean, default: false },
+    randomMode: {
+      type: String,
+      enum: ["per_message", "per_n"],
+      default: "per_message",
+    },
+    perN: { type: Number, default: 0 },
+    selectedTemplates: { type: [Schema.Types.Mixed], default: [] },
+  },
+  { _id: false }
+);
+
+// ====================
 // Blast main schema
-// ================
+// ====================
 const BlastSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: false },
@@ -94,18 +115,20 @@ const BlastSchema = new Schema(
     maxPerBatch: { type: Number, default: 50 }, // pesan sekali jalan
     maxPerDay: { type: Number, default: 300 }, // pesan per hari
 
-    // Meta data
-    meta: {
-      ip: String,
-      userAgent: String,
-    },
+    // ✅ Meta data lengkap (dulu cuma ip & userAgent)
+    meta: { type: MetaSchema, default: () => ({}) },
   },
   { timestamps: true }
 );
 
+// ====================
 // Index buat query cepat
+// ====================
 BlastSchema.index({ userId: 1, createdAt: -1 });
 BlastSchema.index({ "recipients.phone": 1 });
 BlastSchema.index({ "recipients.status": 1 });
 
+// ====================
+// Export model
+// ====================
 module.exports = mongoose.model("Blast", BlastSchema);
