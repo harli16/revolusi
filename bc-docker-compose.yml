@@ -10,7 +10,7 @@ services:
       - MONGO_INITDB_ROOT_USERNAME=root
       - MONGO_INITDB_ROOT_PASSWORD=example
     ports:
-      - "27017:27017"
+      - "27017:27017"   # optional, hapus kalau cukup internal
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -26,15 +26,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-      target: development            # pakai stage development (nodemon)
     container_name: revolusi-backend
     restart: unless-stopped
     env_file:
       - ./backend/.env
-    volumes:
-      - ./backend:/app
-      - /app/node_modules
-    command: npm run dev
     depends_on:
       mongo:
         condition: service_healthy
@@ -42,32 +37,12 @@ services:
       - "3001:3001"
 
   # ==========================
-  # Frontend React (dev mode via vite)
-  # ==========================
-  frontend-dev:
-    build:
-      context: ./fe-wablash
-      dockerfile: Dockerfile
-      target: builder                # pakai stage builder (Node)
-    container_name: revolusi-frontend-dev
-    restart: unless-stopped
-    volumes:
-      - ./fe-wablash:/app
-      - /app/node_modules
-    command: npm run dev -- --host 0.0.0.0
-    depends_on:
-      - backend
-    ports:
-      - "5173:5173"
-
-  # ==========================
-  # Frontend React (production via nginx)
+  # Frontend React (Nginx serve langsung)
   # ==========================
   frontend:
     build:
       context: ./fe-wablash
       dockerfile: Dockerfile
-      target: production             # pakai stage production (nginx)
     container_name: revolusi-frontend
     restart: unless-stopped
     depends_on:

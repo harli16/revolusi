@@ -410,6 +410,32 @@ export default function Contacts() {
             </div>
           )}
         </div>
+        {/* Modal Konfirmasi Delete */}
+        {modal.isOpen && modal.type === "delete" && (
+          <CustomModal
+            isOpen={modal.isOpen}
+            onClose={closeModal}
+            title="Konfirmasi Hapus"
+          >
+            <p className="text-gray-700 mb-4">
+              Apakah Anda yakin ingin menghapus kontak ini?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 rounded bg-gray-300 hover:bg-gray-400 text-gray-800"
+              >
+                Batal
+              </button>
+              <button
+                onClick={() => deleteContact(modal.data.id)}
+                className="px-4 py-2 rounded bg-red-500 hover:bg-red-600 text-white"
+              >
+                Hapus
+              </button>
+            </div>
+          </CustomModal>
+        )}
       </div>
     </div>
   );

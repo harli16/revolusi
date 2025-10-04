@@ -56,9 +56,11 @@ export default function UserLayout() {
   useEffect(() => {
     if (!token) return;
 
+    const API_URL = import.meta.env.VITE_API_URL;
+
     const fetchStatus = async () => {
       try {
-        const res = await axios.get("http://localhost:3001/api/wa/status", {
+        const res = await axios.get(`${API_URL}/api/wa/status`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.data.ok) {
@@ -67,7 +69,7 @@ export default function UserLayout() {
             try {
               // 🔥 Panggil connect untuk trigger startSession (generate QR)
               await axios.post(
-                "http://localhost:3001/api/wa/connect",
+                `${API_URL}/api/wa/connect`,
                 {},
                 {
                   headers: { Authorization: `Bearer ${token}` },
@@ -75,13 +77,10 @@ export default function UserLayout() {
               );
 
               // Ambil QR setelah connect
-              const qrRes = await axios.get(
-                "http://localhost:3001/api/wa/qr.png",
-                {
-                  headers: { Authorization: `Bearer ${token}` },
-                  responseType: "blob",
-                }
-              );
+              const qrRes = await axios.get(`${API_URL}/api/wa/qr.png`, {
+                headers: { Authorization: `Bearer ${token}` },
+                responseType: "blob",
+              });
               const url = URL.createObjectURL(qrRes.data);
               setQrUrl(url);
             } catch (err) {
@@ -105,7 +104,7 @@ export default function UserLayout() {
     // ✅ listen event QR & ready
     socket.on("wa:qr", () => {
       // QR baru bisa langsung diambil dari endpoint
-      setQrUrl("http://localhost:3001/api/wa/qr.png?t=" + Date.now());
+      setQrUrl(`${API_URL}/api/wa/qr.png?t=${Date.now()}`);
       setWaConnected(false);
     });
 
@@ -119,7 +118,6 @@ export default function UserLayout() {
       socket.off("wa:ready");
     };
   }, [token, user?.id]);
-
   return (
     <div className="flex h-screen bg-gray-100">
       {/* Sidebar */}

@@ -162,7 +162,8 @@ export default function KirimPesan() {
   
       intervalRef.current = setInterval(async () => {
         try {
-          const res = await fetch(`http://localhost:3001/api/blasts/${blastId}`, {
+          const API_URL = import.meta.env.VITE_API_URL;
+          const res = await fetch(`${API_URL}/api/blasts/${blastId}`, {
             headers: { Authorization: `Bearer ${token}` },
           });
           const data = await res.json();

@@ -1,22 +1,28 @@
 # ==========================
-# Backend Dockerfile
+# Backend Dockerfile (multi-stage)
 # ==========================
 
-FROM node:20-alpine
-
+# ---------- Stage 1: base ----------
+FROM node:20-alpine AS base
 WORKDIR /app
-
-# Copy package.json (+ lockfile kalau ada)
 COPY package*.json ./
 
-# Install dependencies (production only)
+# Install semua dependency (termasuk devDependencies)
 RUN npm install --legacy-peer-deps
 
-# Copy seluruh source code backend
+# Copy seluruh source code
 COPY . .
 
-# Expose port backend
-EXPOSE 3001
+# ---------- Stage 2: development ----------
+FROM base AS development
+ENV NODE_ENV=development
+# 🔥 pastikan nodemon tersedia di path global
+RUN npm install -g nodemon
+CMD ["npm", "run", "dev"]
 
-# Start app
+# ---------- Stage 3: production ----------
+FROM base AS production
+ENV NODE_ENV=production
 CMD ["npm", "start"]
+
+EXPOSE 3001

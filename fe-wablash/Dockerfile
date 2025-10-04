@@ -1,30 +1,38 @@
-techteam@monitoring:~/nguliks/revolusi/fe-wablash$ cat Dockerfile 
-# Stage 1: Build React Vite
+# ==========================
+# Stage 1: Build React (Vite)
+# ==========================
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Install dependencies
+# Salin file konfigurasi package
 COPY package*.json ./
+
+# Install dependencies (gunakan cache layer agar lebih cepat)
 RUN npm install
 
-# Copy source code
+# Salin semua source code ke container
 COPY . .
 
-# Build production
+# Build project untuk production
 RUN npm run build
 
-# Stage 2: Serve with Nginx
-FROM nginx:alpine
+# ==========================
+# Stage 2: Serve hasil build dengan Nginx
+# ==========================
+FROM nginx:alpine AS production
 WORKDIR /usr/share/nginx/html
 
-# hapus default config
+# Hapus file default bawaan Nginx
 RUN rm -rf ./*
 
-# Copy build hasil dari stage builder
+# Salin hasil build dari stage builder
 COPY --from=builder /app/dist .
 
-# Copy custom Nginx config
+# Copy custom konfigurasi Nginx (jika ada)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Expose port untuk Nginx
 EXPOSE 80
+
+# Jalankan Nginx di foreground
 CMD ["nginx", "-g", "daemon off;"]
