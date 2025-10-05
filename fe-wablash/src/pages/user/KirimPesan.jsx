@@ -55,6 +55,7 @@ const formatDate = (val) => {
 export default function KirimPesan() {
   const { user, token } = useAuth();
   const { message, setMessage, currentBlast, setCurrentBlast } = useBlast();
+  const { statusMap, setStatusMap } = useBlast();
   const [recipients, setRecipients] = useState([]);
   const [showPlaceholder, setShowPlaceholder] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
@@ -72,6 +73,8 @@ export default function KirimPesan() {
   const [maxPerDay, setMaxPerDay] = useState(300);
   const [blastId, setBlastId] = useState(null);
   const intervalRef = useRef(null);
+  
+
 
   // restore blastId dari localStorage
   useEffect(() => {
@@ -122,7 +125,7 @@ export default function KirimPesan() {
       console.error("Error resume blast:", err);
     }
   };
-
+  
   const [pending, setPending] = useState(0);
   const [waConnected, setWaConnected] = useState(false);
   const [blastLogs, setBlastLogs] = useState([]);
@@ -169,55 +172,62 @@ export default function KirimPesan() {
           const data = await res.json();
           if (data.ok) {
             const b = data.blast;
-  
-            // total recipients
-            const totalRecipients = Array.isArray(b.recipients) ? b.recipients.length : 0;
-  
-            // hitung jumlah status langsung dari recipients (ground truth)
+
+            // ============================
+            // Hitung status secara eksklusif
+            // ============================
+            const recipients = Array.isArray(b.recipients) ? b.recipients : [];
+            const totalRecipients = recipients.length;
+
+            // Set status untuk kategori
+            const PENDING = new Set(["queued", "pending"]);
+            const FINAL   = new Set([
+              "sent", "delivered", "read", "played",
+              "failed", "cancelled", "stopped", "completed"
+            ]);
+
+            // Hitung jumlah masing-masing status (tanpa double-count)
             let sent = 0;
             let delivered = 0;
             let read = 0;
             let played = 0;
             let failed = 0;
-  
-            b.recipients.forEach((r) => {
-              if (r.status === "failed") {
-                failed++;
-              } else if (r.status === "played") {
-                // played = sudah sent + delivered + read
-                played++;
-                read++;
-                delivered++;
-                sent++;
-              } else if (r.status === "read") {
-                read++;
-                delivered++;
-                sent++;
-                if (r.played) played++;
-              } else if (r.status === "delivered") {
-                delivered++;
-                sent++;
-              } else if (r.status === "sent") {
-                sent++;
+
+            recipients.forEach((r) => {
+              switch (r.status) {
+                case "sent":
+                  sent++;
+                  break;
+                case "delivered":
+                  delivered++;
+                  break;
+                case "read":
+                  read++;
+                  break;
+                case "played":
+                  played++;
+                  break;
+                case "failed":
+                  failed++;
+                  break;
+                default:
+                  break;
               }
             });
-  
-            // definisi status
-            const PENDING = new Set(["queued", "pending"]); // status batch ketahan
-            const FINAL = new Set([
-              "sent", "delivered", "read", "played",
-              "failed", "cancelled", "stopped", "completed"
-            ]);
-  
-            // hitung pending & selesai
-            const pendingCount = b.recipients.filter((r) => PENDING.has(r.status)).length;
-            const doneCount = b.recipients.filter((r) => FINAL.has(r.status)).length;
-  
-            // progress global
+
+            // ============================
+            // Hitung pending & progress
+            // ============================
+            const pendingCount = recipients.filter((r) => PENDING.has(r.status)).length;
+            const doneCount = recipients.filter((r) => FINAL.has(r.status)).length;
+
+            // Jangan biarkan progress <0 atau >100
             const rawProgress = Math.round((doneCount / (totalRecipients || 1)) * 100);
             const progress = Math.min(100, Math.max(0, rawProgress));
-  
-            // update state
+
+            // ============================
+            // Update state FE
+            // ============================
             setCurrentBlast((prev) => ({
               ...prev,
               blastId: b._id,
@@ -234,8 +244,10 @@ export default function KirimPesan() {
               maxPerDay: b.maxPerDay || 0,
               status: b.status,                  // simpan status global (active/paused/stopped)
             }));
-  
-            // kondisi selesai → semua recipient status final
+
+            // ============================
+            // Kondisi selesai → semua final
+            // ============================
             if (doneCount >= totalRecipients && pendingCount === 0) {
               clearInterval(intervalRef.current);
               intervalRef.current = null;
@@ -244,7 +256,6 @@ export default function KirimPesan() {
               setCurrentBlast((prev) => ({
                 ...prev,
                 loading: false,
-                statusText: "🎉 Blast selesai! Semua batch sudah terkirim.",
               }));
             }
           }
@@ -279,107 +290,109 @@ export default function KirimPesan() {
     });
     recipientsIndexRef.current = map;
   }, [recipients]);
-  // socket listener
-  useEffect(() => {
-    if (!socket) return;
 
-    // mapping prioritas status (jangan nurunin status kalau udah lebih tinggi)
-    const statusPriority = {
-      sent: 1,
-      delivered: 2,
-      read: 3,
-      played: 4,
-      failed: 100,
-    };
+  // 🧠 simpan status terakhir per nomor antar render
+  const recipientStatusRef = useRef(new Map());
+  console.log("🧾 CURRENT STATUSMAP STATE:", statusMap);
 
-    // status terakhir per nomor
-    const recipientStatus = new Map();
+// =======================================
+// 🔥 SOCKET REALTIME STATUS TRACKER (Realtime Mirip LogPengiriman)
+// =======================================
+useEffect(() => {
+  if (!socket) return;
 
-    const statusLabel = {
-      sent: "terkirim",
-      delivered: "sudah diterima",
-      read: "sudah dibaca",
-      played: "media diputar",
-      failed: "gagal",
-    };
+  const statusPriority = {
+    sent: 1,
+    delivered: 2,
+    read: 3,
+    played: 4,
+    failed: 100,
+  };
 
-    const handleStatus = (data) => {
-      // 1) normalisasi & validasi phone
-      const phoneNorm = normalizePhone(data.phone || data.to || "");
-      if (!phoneNorm) return;                           // 🔒 skip event tanpa nomor
-      if (!recipientsIndexRef.current.has(phoneNorm)) { // 🔒 skip kalau bukan bagian blast ini
-        return;
-      }
+  // 💾 State tambahan buat realtime per nomor
+  const updateStatusMap = (phone, status) => {
+    setStatusMap((prev) => ({
+      ...prev,
+      [phone]: status,
+    }));
+  };
 
-      const status = (data.status || "").toLowerCase();
-      const prev = recipientStatus.get(phoneNorm);
-      if (!prev || statusPriority[status] >= statusPriority[prev]) {
-        recipientStatus.set(phoneNorm, status);
-      }
+  const handleStatus = (data) => {
+  console.log("🎯 SOCKET STATUS EVENT:", data);
+  if (!data) return;
 
-      // 2) ambil meta penerima dari index (biar ada nama & sekolah)
-      const rec = recipientsIndexRef.current.get(phoneNorm);
+  const phoneNorm = normalizePhone(data.phone || data.to || "");
+  const newStat = data.status;
 
-      // 3) update log (hindari duplikasi nomor+status)
+  // pastikan status valid
+  if (!statusPriority[newStat]) return;
 
-      setBlastLogs((prev) => {
-        const exists = prev.some(
-          (l) => l.number === phoneNorm && l.status === statusLabel[status]
-        );
-        if (exists) return prev;
-        return [
-          ...prev,
-          {
-            name: rec?.name || data.name || "-",
-            number: phoneNorm,
-            school: rec?.school || data.school || "",
-            status: statusLabel[status] || status,
-          },
-        ];
-      });
+  const prev = recipientStatusRef.current.get(phoneNorm);
 
-      // hitung ulang counter dari semua nomor yang ada di map
-      setCurrentBlast((prev) => {
-        if (!prev) return prev;
-        const updated = { ...prev };
+  // ✅ hanya skip jika status lebih rendah DAN bukan 'played'
+  if (prev && statusPriority[newStat] < statusPriority[prev] && newStat !== "played") return;
 
-        let sent = 0, delivered = 0, read = 0, played = 0, failed = 0;
-        recipientStatus.forEach((s, num) => {
-          if (!recipientsIndexRef.current.has(num)) return;
-          if (s === "failed") {
-            failed++;
-          } else if (s === "played") {
-            played++; read++; delivered++; sent++;
-          } else if (s === "read") {
-            read++; delivered++; sent++;
-          } else if (s === "delivered") {
-            delivered++; sent++;
-          } else if (s === "sent") {
-            sent++;
-          }
-        });
+  // simpan status terbaru
+  recipientStatusRef.current.set(phoneNorm, newStat);
 
-        updated.sent = sent;
-        updated.delivered = delivered;
-        updated.read = read;
-        updated.played = played;
-        updated.failed = failed;
+  // 🧠 Log realtime update
+  console.log("🧠 UPDATE STATUSMAP:", phoneNorm, "=>", newStat);
 
-        const uniqueCount = Array.from(recipientStatus.keys())
-          .filter((num) => recipientsIndexRef.current.has(num)).length;
+  // update realtime ke map state
+  setStatusMap((prevMap) => ({ ...prevMap, [phoneNorm]: newStat }));
 
-        updated.current = uniqueCount;
-        updated.progress = Math.min(
-          100,
-          Math.round((uniqueCount / (updated.total || 1)) * 100)
-        );
-        return updated;
-      });
-    };
+  // update agregat progress
+  setCurrentBlast((prevState) => {
+    if (!prevState) return prevState;
+    const updated = JSON.parse(JSON.stringify(prevState));
+    const total = updated.total || 1;
 
-    socket.on("message:status", handleStatus);
-    return () => socket.off("message:status", handleStatus);
-  }, [socket, recipients, setCurrentBlast, setBlastLogs]);
+    ["sent", "delivered", "read", "played", "failed", "pending"].forEach((key) => {
+      if (typeof updated[key] !== "number") updated[key] = 0;
+    });
+
+    switch (newStat) {
+      case "sent":
+        updated.sent++;
+        break;
+      case "delivered":
+        updated.delivered++;
+        if (updated.sent < updated.delivered) updated.sent = updated.delivered;
+        break;
+      case "read":
+        updated.read++;
+        if (updated.delivered < updated.read) updated.delivered = updated.read;
+        if (updated.sent < updated.read) updated.sent = updated.read;
+        break;
+      case "played":
+        updated.played++;
+        if (updated.read < updated.played) updated.read = updated.played;
+        if (updated.delivered < updated.played) updated.delivered = updated.played;
+        if (updated.sent < updated.played) updated.sent = updated.played;
+        break;
+      case "failed":
+        updated.failed++;
+        break;
+    }
+
+    const done =
+      updated.sent +
+      updated.delivered +
+      updated.read +
+      updated.played +
+      updated.failed;
+
+    updated.pending = Math.max(0, total - done);
+    updated.progress = Math.min(100, Math.round((done / total) * 100));
+    return updated;
+  });
+};
+
+
+  socket.on("message:status", handleStatus);
+  return () => socket.off("message:status", handleStatus);
+}, [socket, blastId, currentBlast, token, setCurrentBlast]);
+
 
   // send blast
   const handleSend = async () => {
@@ -530,7 +543,7 @@ export default function KirimPesan() {
 
   const emojis = [
     "😀","😁","😂","🤣","😊","😍","😘","🤩","😎","👍",
-    "🙏","🎉","🔥","❤️","💯"
+    "🙏","🎉","🔥","❤️","💯","🥱"
   ];
 
   // === Render message dengan placeholder ===
@@ -805,48 +818,65 @@ export default function KirimPesan() {
               {/* Bar */}
               <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4">
                 <div
-                  className="bg-indigo-600 h-4 rounded-full transition-all duration-500"
-                  style={{ width: `${Math.min(100, currentBlast.progress || 0)}%` }}
+                  className="bg-gradient-to-r from-indigo-500 to-blue-600 h-4 rounded-full transition-[width] duration-700 ease-out"
+                    style={{
+                      width: `${Math.min(100, currentBlast.progress || 0)}%`,
+                      boxShadow: "0 0 10px rgba(79,70,229,0.6)",
+                    }}
                 ></div>
               </div>
-
-              {/* Detail */}
-              <p className="text-sm mt-2">
-                {currentBlast.current}/{currentBlast.total} selesai
-              </p>
-              <p className="text-sm mt-1">{currentBlast.statusText}</p>
-              {/* Log pengiriman realtime */}
-              {blastLogs.length > 0 && (
-                <div className="mt-4 border-t pt-3">
-                  <h4 className="font-semibold mb-2 text-sm text-gray-700">Aktivitas Pengiriman</h4>
-                  <div className="max-h-40 overflow-y-auto text-sm space-y-1">
-                    {blastLogs.slice(-10).reverse().map((log, idx) => (
-                      <div
-                        key={idx}
-                        className={`flex items-center justify-between p-2 rounded ${
-                          log.status === "gagal"
-                            ? "bg-red-50 text-red-700"
-                            : "bg-green-50 text-green-700"
-                        }`}
-                      >
-                        <div className="flex-1">
-                          <p className="font-medium">
-                            Sedang mengirim pesan ke{" "}
-                            <span className="text-gray-800 font-semibold">{log.number}</span>{" "}
-                            - {log.name}
-                          </p>
-                          {log.school && (
-                            <p className="text-xs text-gray-500 mt-0.5">{log.school}</p>
-                          )}
-                        </div>
-                        <div className="flex-shrink-0 ml-2 text-xs font-bold uppercase">
-                          {log.status}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+              {currentBlast?.startTime && (
+                <p className="text-xs text-gray-500 mt-2">
+                  ⏰ Mulai: {new Date(currentBlast.startTime).toLocaleString("id-ID")}
+                </p>
               )}
+              {currentBlast?.endTime && (
+                <p className="text-xs text-gray-500">
+                  🏁 Selesai: {new Date(currentBlast.endTime).toLocaleString("id-ID")}
+                </p>
+              )}
+              {/* Detail */}
+              <p className="text-sm text-gray-600">
+                {currentBlast.current}/{currentBlast.total} selesai ({currentBlast.progress}%)
+              </p>
+              {currentBlast.current === currentBlast.total ? (
+                <p className="text-sm text-emerald-700 mt-1">
+                  🎉 Blast selesai! Semua pesan sudah diproses.
+                </p>
+              ) : (
+                <p className="text-sm text-gray-500 mt-1">
+                  Batch masih berjalan…
+                </p>
+              )}
+              <p className="text-sm mt-1">{currentBlast.statusText}</p>
+              {/* Ringkasan pengiriman */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3 text-xs text-gray-700">
+                <div className="flex items-center gap-2 bg-gray-50 px-2 py-1 rounded">
+                  <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+                  <span>Sedang mengirim: <strong>{currentBlast.pending}</strong></span>
+                </div>
+                <div className="flex items-center gap-2 bg-blue-50 px-2 py-1 rounded">
+                  <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                  <span>Menunggu: <strong>{currentBlast.sent}</strong></span>
+                </div>
+                <div className="flex items-center gap-2 bg-green-50 px-2 py-1 rounded">
+                  <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                  <span>Terkirim: <strong>{currentBlast.read}</strong></span>
+                </div>
+                <div className="flex items-center gap-2 bg-yellow-50 px-2 py-1 rounded">
+                  <span className="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                  <span>
+                    Dibaca:{" "}
+                    <strong>
+                      {Object.values(statusMap).filter((s) => s === "played").length}
+                    </strong>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 bg-red-50 px-2 py-1 rounded">
+                  <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                  <span>Gagal: <strong>{currentBlast.failed}</strong></span>
+                </div>
+              </div>
             </div>
           )}
         </div>

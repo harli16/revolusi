@@ -115,6 +115,10 @@ const BlastSchema = new Schema(
     maxPerBatch: { type: Number, default: 50 }, // pesan sekali jalan
     maxPerDay: { type: Number, default: 300 }, // pesan per hari
 
+   // 🕓 Waktu eksekusi blast
+   startTime: { type: Date, default: null },  // kapan blast mulai dijalankan
+   endTime: { type: Date, default: null },    // kapan blast selesai total
+
     // ✅ Meta data lengkap (dulu cuma ip & userAgent)
     meta: { type: MetaSchema, default: () => ({}) },
   },

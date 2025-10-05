@@ -25,20 +25,32 @@ router.get("/", async (req, res) => {
     username: req.user.username,
     role: req.user.role,
   });
+
   try {
-    const { search, page = 1, limit = 20 } = req.query;
+    const { search, school, kelas, page = 1, limit = 20 } = req.query;
     const q = {};
 
     if (req.user.role !== "admin") {
-      // ✅ convert ke ObjectId
+      // ✅ hanya tampilkan kontak milik user ini
       q.userId = new mongoose.Types.ObjectId(req.user.id);
     }
 
+    // 🔍 Filter pencarian nama / nomor
     if (search) {
       q.$or = [
         { waNumber: new RegExp(search, "i") },
         { name: new RegExp(search, "i") },
       ];
+    }
+
+    // 🏫 Filter asal sekolah (jika dikirim)
+    if (school) {
+      q.school = new RegExp(`^${school}$`, "i"); // exact match, ignore case
+    }
+
+    // 🎓 Filter kelas (jika dikirim)
+    if (kelas) {
+      q.kelas = new RegExp(`^${kelas}$`, "i");
     }
 
     // 🔑 Debug log filter query
@@ -56,7 +68,6 @@ router.get("/", async (req, res) => {
       Contact.countDocuments(q),
     ]);
 
-    // 🔑 Debug hasil
     console.log(`📦 Hasil contacts: ${items.length} dari total ${total}`);
 
     res.json({ ok: true, page: p, limit: l, total, items });

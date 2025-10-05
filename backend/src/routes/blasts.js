@@ -115,6 +115,7 @@ router.post("/:blastId/stop", authenticateToken, async (req, res) => {
     });
 
     blast.status = "stopped";
+    blast.endTime = new Date(); // 🏁 waktu selesai blast
     await blast.save();
 
     console.log(
@@ -338,6 +339,7 @@ router.post("/", authenticateToken, async (req, res) => {
       maxPerBatch,
       maxPerDay,
       schedule: schedule ? new Date(schedule) : null,
+      startTime: new Date(), // ⏰ waktu mulai blast
       meta: {
         ip: req.ip || "unknown",
         userAgent: req.headers["user-agent"] || "unknown",
@@ -367,6 +369,7 @@ router.post("/", authenticateToken, async (req, res) => {
         ? `${blast.meta.randomMode} (perN=${blast.meta.perN})`
         : "off",
       templates: templates?.length || 0,
+      startTime: blast.startTime, // 🕓 tampilkan di log
     });
 
     if (!schedule) {

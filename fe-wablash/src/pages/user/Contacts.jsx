@@ -1,20 +1,15 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import api from "../../utils/api"; // 🔑 pakai axios instance
 import { useAuth } from "../../context/AuthContext";
 import {
-  Search,
   FileDown,
   FileUp,
-  Pen,
-  Trash2,
-  Save,
-  X,
   LoaderCircle,
+  X,
 } from "lucide-react";
 
 const CustomModal = ({ isOpen, onClose, title, children }) => {
   if (!isOpen) return null;
-
   return (
     <div className="fixed inset-0 bg-black/30 backdrop-blur-md flex justify-center items-center z-50">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 relative animate-fade-in-down">
@@ -37,6 +32,8 @@ export default function Contacts() {
   const { token } = useAuth();
   const [contacts, setContacts] = useState([]);
   const [search, setSearch] = useState("");
+  const [school, setSchool] = useState("");
+  const [kelas, setKelas] = useState("");
   const [file, setFile] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -49,14 +46,14 @@ export default function Contacts() {
   const [modal, setModal] = useState({ isOpen: false, type: "", data: null });
 
   // ==========================
-  // Fetch contacts
+  // Fetch contacts (with filters)
   // ==========================
   const fetchContacts = async () => {
     setIsLoading(true);
     try {
       const res = await api.get("/api/contacts", {
         headers: { Authorization: `Bearer ${token}` },
-        params: { search },
+        params: { search, school, kelas },
       });
       if (res.data.ok) {
         setContacts(res.data.items || []);
@@ -73,12 +70,23 @@ export default function Contacts() {
     }
   };
 
+  // ambil unique list untuk dropdown
+  const uniqueSchools = useMemo(() => {
+    const arr = contacts.map((c) => (c.school || "").trim().toUpperCase());
+    return [...new Set(arr.filter((v) => v))];
+  }, [contacts]);
+
+  const uniqueClasses = useMemo(() => {
+    const arr = contacts.map((c) => (c.kelas || "").trim().toUpperCase());
+    return [...new Set(arr.filter((v) => v))];
+  }, [contacts]);
+
   useEffect(() => {
-    const debounceTimer = setTimeout(() => {
+    const t = setTimeout(() => {
       if (token) fetchContacts();
     }, 300);
-    return () => clearTimeout(debounceTimer);
-  }, [token, search]);
+    return () => clearTimeout(t);
+  }, [token, search, school, kelas]);
 
   // ==========================
   // Export contacts
@@ -90,7 +98,6 @@ export default function Contacts() {
         headers: { Authorization: `Bearer ${token}` },
         responseType: "blob",
       });
-
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement("a");
       link.href = url;
@@ -98,14 +105,12 @@ export default function Contacts() {
       document.body.appendChild(link);
       link.click();
       link.remove();
-
       setModal({
         isOpen: true,
         type: "success",
         data: { message: "Kontak berhasil diekspor." },
       });
-    } catch (err) {
-      console.error("❌ Error export contacts:", err);
+    } catch {
       setModal({
         isOpen: true,
         type: "error",
@@ -131,7 +136,6 @@ export default function Contacts() {
     const formData = new FormData();
     formData.append("file", selectedFile);
     setActionLoading("import");
-
     try {
       const res = await api.post("/api/contacts/import", formData, {
         headers: {
@@ -147,8 +151,7 @@ export default function Contacts() {
         });
         fetchContacts();
       }
-    } catch (err) {
-      console.error("❌ Error import contacts:", err);
+    } catch {
       setModal({
         isOpen: true,
         type: "error",
@@ -164,20 +167,18 @@ export default function Contacts() {
   };
 
   // ==========================
-  // Edit contact
+  // Edit/Delete contact
   // ==========================
   const startEdit = (c) => {
     setEditing(c._id);
     setEditName(c.name || "");
     setEditNumber(c.waNumber || "");
   };
-
   const cancelEdit = () => {
     setEditing(null);
     setEditName("");
     setEditNumber("");
   };
-
   const saveEdit = async (id) => {
     setActionLoading(id);
     try {
@@ -195,8 +196,7 @@ export default function Contacts() {
         cancelEdit();
         fetchContacts();
       }
-    } catch (err) {
-      console.error("❌ Error update contact:", err);
+    } catch {
       setModal({
         isOpen: true,
         type: "error",
@@ -207,12 +207,8 @@ export default function Contacts() {
     }
   };
 
-  // ==========================
-  // Delete contact
-  // ==========================
-  const handleDeleteRequest = (id) => {
+  const handleDeleteRequest = (id) =>
     setModal({ isOpen: true, type: "delete", data: { id } });
-  };
 
   const deleteContact = async (id) => {
     setActionLoading(id);
@@ -229,8 +225,7 @@ export default function Contacts() {
         });
         fetchContacts();
       }
-    } catch (err) {
-      console.error("❌ Error delete contact:", err);
+    } catch {
       setModal({
         isOpen: true,
         type: "error",
@@ -243,6 +238,15 @@ export default function Contacts() {
 
   const closeModal = () => setModal({ isOpen: false, type: "", data: null });
 
+  const resetFilter = () => {
+    setSchool("");
+    setKelas("");
+    setSearch("");
+  };
+
+  // ==========================
+  // UI
+  // ==========================
   return (
     <div className="bg-gray-100 min-h-screen text-gray-800 font-sans p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
@@ -250,22 +254,50 @@ export default function Contacts() {
           <h1 className="text-3xl font-bold text-gray-900">Daftar Kontak</h1>
         </header>
 
-        {/* Actions Bar */}
-        <div className="bg-white p-4 rounded-lg shadow-md mb-6 flex flex-col sm:flex-row items-center gap-4">
-          <div className="relative w-full sm:flex-1">
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Cari nama / nomor..."
-              className="bg-gray-50 border border-gray-300 text-gray-900 placeholder-gray-400 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block w-full p-2.5 transition"
-            />
-          </div>
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+        {/* FILTER & ACTIONS */}
+        <div className="bg-white p-4 rounded-lg shadow-md mb-6 flex flex-col sm:flex-row flex-wrap items-center gap-3">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Cari nama / nomor..."
+            className="bg-gray-50 border border-gray-300 rounded-md text-sm p-2.5 flex-1"
+          />
+
+          <select
+            value={school}
+            onChange={(e) => setSchool(e.target.value)}
+            className="border border-gray-300 rounded-md p-2 text-sm bg-white"
+          >
+            <option value="">Semua Sekolah</option>
+            {uniqueSchools.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <select
+            value={kelas}
+            onChange={(e) => setKelas(e.target.value)}
+            className="border border-gray-300 rounded-md p-2 text-sm bg-white"
+          >
+            <option value="">Semua Kelas</option>
+            {uniqueClasses.map((k) => (
+              <option key={k} value={k}>{k}</option>
+            ))}
+          </select>
+
+          <button
+            onClick={resetFilter}
+            className="text-sm text-gray-600 hover:text-gray-800 underline"
+          >
+            Reset Filter
+          </button>
+
+          <div className="flex items-center gap-2 ml-auto">
             <button
               onClick={handleExport}
               disabled={actionLoading === "export"}
-              className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-md transition duration-300"
+              className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold py-2 px-4 rounded-md transition"
             >
               <FileDown size={18} />
               <span>Export</span>
@@ -281,14 +313,15 @@ export default function Contacts() {
             <button
               onClick={() => fileInputRef.current.click()}
               disabled={actionLoading === "import"}
-              className="flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-md transition duration-300"
+              className="flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-bold py-2 px-4 rounded-md transition"
             >
               <FileUp size={18} />
               <span>Import</span>
             </button>
           </div>
         </div>
-        {/* Contacts Table */}
+
+        {/* TABEL KONTAK */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden">
           {isLoading ? (
             <div className="flex justify-center items-center h-64">
@@ -297,9 +330,9 @@ export default function Contacts() {
           ) : contacts.length === 0 ? (
             <div className="text-center py-16">
               <p className="text-gray-500">Tidak ada kontak ditemukan.</p>
-              {search && (
+              {(search || school || kelas) && (
                 <p className="text-gray-400 text-sm mt-1">
-                  Coba kata kunci lain.
+                  Coba ubah atau reset filter.
                 </p>
               )}
             </div>
@@ -308,13 +341,12 @@ export default function Contacts() {
               <table className="w-full text-sm text-left text-gray-600">
                 <thead className="text-xs text-gray-700 uppercase bg-gray-100">
                   <tr>
-                    <th scope="col" className="px-6 py-3">Nama</th>
-                    <th scope="col" className="px-6 py-3">Nomor WA</th>
-                    {/* 🔥 NEW: kolom Asal Sekolah & Kelas */}
-                    <th scope="col" className="px-6 py-3 hidden lg:table-cell">Asal Sekolah</th>
-                    <th scope="col" className="px-6 py-3 hidden lg:table-cell">Kelas</th>
-                    <th scope="col" className="px-6 py-3 hidden md:table-cell">Terakhir Diperbarui</th>
-                    <th scope="col" className="px-6 py-3 text-center">Aksi</th>
+                    <th className="px-6 py-3">Nama</th>
+                    <th className="px-6 py-3">Nomor WA</th>
+                    <th className="px-6 py-3 hidden lg:table-cell">Asal Sekolah</th>
+                    <th className="px-6 py-3 hidden lg:table-cell">Kelas</th>
+                    <th className="px-6 py-3 hidden md:table-cell">Terakhir Diperbarui</th>
+                    <th className="px-6 py-3 text-center">Aksi</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -342,66 +374,44 @@ export default function Contacts() {
                             className="bg-gray-100 border border-gray-300 p-1 rounded w-full"
                           />
                         ) : (
-                          c.waNumber || c._id
+                          c.waNumber || "-"
                         )}
                       </td>
-
-                      {/* 🔥 NEW: tampilkan SCHOOL & KELAS (capslock) */}
-                      <td className="px-6 py-4 hidden lg:table-cell">
-                        {(c.school || "-").toString().toUpperCase()}
-                      </td>
-                      <td className="px-6 py-4 hidden lg:table-cell">
-                        {(c.kelas || "-").toString().toUpperCase()}
-                      </td>
-
+                      <td className="px-6 py-4 hidden lg:table-cell">{(c.school || "-").toUpperCase()}</td>
+                      <td className="px-6 py-4 hidden lg:table-cell">{(c.kelas || "-").toUpperCase()}</td>
                       <td className="px-6 py-4 hidden md:table-cell">
-                        {new Date(c.updatedAt || c.lastAt).toLocaleString("id-ID", {
-                          day: "numeric",
-                          month: "long",
-                          year: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
+                        {new Date(c.updatedAt).toLocaleString("id-ID")}
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          {editing === c._id ? (
-                            <>
-                              <button
-                                onClick={() => saveEdit(c._id)}
-                                disabled={actionLoading === c._id}
-                                className="text-green-500 hover:text-green-600 p-1 disabled:text-gray-400"
-                              >
-                                {actionLoading === c._id ? (
-                                  <LoaderCircle className="animate-spin" size={20} />
-                                ) : (
-                                  "Simpan"
-                                )}
-                              </button>
-                              <button
-                                onClick={cancelEdit}
-                                className="text-gray-500 hover:text-gray-700 p-1"
-                              >
-                                Batal
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                onClick={() => startEdit(c)}
-                                className="bg-yellow-400 text-white px-3 py-1 rounded-md text-xs font-semibold hover:bg-yellow-500"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => handleDeleteRequest(c._id)}
-                                className="bg-red-500 text-white px-3 py-1 rounded-md text-xs font-semibold hover:bg-red-600"
-                              >
-                                Hapus
-                              </button>
-                            </>
-                          )}
-                        </div>
+                        {editing === c._id ? (
+                          <div className="flex gap-2 justify-center">
+                            <button
+                              onClick={() => saveEdit(c._id)}
+                              disabled={actionLoading === c._id}
+                              className="text-green-500 hover:text-green-600"
+                            >
+                              Simpan
+                            </button>
+                            <button onClick={cancelEdit} className="text-gray-500 hover:text-gray-700">
+                              Batal
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2 justify-center">
+                            <button
+                              onClick={() => startEdit(c)}
+                              className="bg-yellow-400 text-white px-3 py-1 rounded-md text-xs font-semibold hover:bg-yellow-500"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteRequest(c._id)}
+                              className="bg-red-500 text-white px-3 py-1 rounded-md text-xs font-semibold hover:bg-red-600"
+                            >
+                              Hapus
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -410,7 +420,8 @@ export default function Contacts() {
             </div>
           )}
         </div>
-        {/* Modal Konfirmasi Delete */}
+
+        {/* MODAL HAPUS */}
         {modal.isOpen && modal.type === "delete" && (
           <CustomModal
             isOpen={modal.isOpen}

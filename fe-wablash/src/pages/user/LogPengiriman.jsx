@@ -176,7 +176,7 @@ export default function LogPengiriman() {
       default:
         return (
           <span className="flex items-center gap-1 bg-gray-100 text-gray-800 px-2 py-1 rounded-full">
-            <Clock className="w-3.5 h-3.5 text-gray-500" /> Tidak diketahui
+            <Clock className="w-3.5 h-3.5 text-gray-500" /> Belum sampai
           </span>
         );
     }

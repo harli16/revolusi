@@ -254,10 +254,9 @@ class SingleWASession extends EventEmitter {
             { _id: 1 }
           );
 
-          // Ambil data penerima dari Blast (biar bisa kirim nama & nomor)
           const blastDoc = await Blast.findOne(
             { userId: this.userId, "recipients.waMsgId": waMsgId },
-            { "recipients.$": 1 }
+            { _id: 1, "recipients.$": 1 }
           );
 
           let phone = "-";
@@ -274,6 +273,7 @@ class SingleWASession extends EventEmitter {
               status: newStatus,
               phone,
               name,
+              blastId: blastDoc?._id,
             });
             io.to(this.userId.toString()).emit("message:status", {
               providerId: waMsgId,
@@ -281,6 +281,7 @@ class SingleWASession extends EventEmitter {
               status: newStatus,
               phone,
               name,
+              blastId: blastDoc?._id?.toString(),
             });
           }
         }
