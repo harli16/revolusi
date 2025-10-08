@@ -22,7 +22,11 @@ const contactSchema = new mongoose.Schema(
     kelas: { 
       type: String, 
       default: "" 
-    }
+    },
+    tahunLulus: { 
+      type: String,
+      default: "" 
+    },
   },
   { timestamps: true } // otomatis createdAt & updatedAt
 );

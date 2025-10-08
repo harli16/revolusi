@@ -27,7 +27,7 @@ router.get("/", async (req, res) => {
   });
 
   try {
-    const { search, school, kelas, page = 1, limit = 20 } = req.query;
+    const { search, school, kelas, tahun, page = 1, limit = 20 } = req.query;
     const q = {};
 
     if (req.user.role !== "admin") {
@@ -51,6 +51,11 @@ router.get("/", async (req, res) => {
     // 🎓 Filter kelas (jika dikirim)
     if (kelas) {
       q.kelas = new RegExp(`^${kelas}$`, "i");
+    }
+
+    // 🎓 Filter tauhun lulus (jika dikirim)
+    if (tahun) {
+      q.tahunLulus = new RegExp(`^${tahun}$`, "i");
     }
 
     // 🔑 Debug log filter query
@@ -126,15 +131,18 @@ router.post("/import", upload.single("file"), async (req, res) => {
       if (rawNumber.startsWith("0")) rawNumber = "62" + rawNumber.slice(1);
 
       await Contact.updateOne(
-        { userId: new mongoose.Types.ObjectId(req.user.id), waNumber: rawNumber },
-        {
-          $setOnInsert: {
-            // 🔥 standarisasi nama ke Title Case
-            name: toTitleCase(row["NAMA LENGKAP"] || row["name"] || rawNumber),
-          },
+      { userId: new mongoose.Types.ObjectId(req.user.id), waNumber: rawNumber },
+      {
+        $setOnInsert: {
+          // 🔥 standarisasi nama ke Title Case
+          name: toTitleCase(row["NAMA LENGKAP"] || row["name"] || rawNumber),
+          school: toTitleCase(row["ASAL SEKOLAH"] || row["school"] || ""),
+          kelas: (row["KELAS"] || row["kelas"] || "").toString(),
+          tahunLulus: (row["TAHUN LULUS"] || row["tahunLulus"] || "").toString(),
         },
-        { upsert: true }
-      );
+      },
+      { upsert: true }
+    );
       imported++;
     }
 

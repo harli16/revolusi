@@ -235,22 +235,6 @@ router.get("/:blastId", authenticateToken, async (req, res) => {
   }
 });
 
-// 🔥 Normalisasi nomor HP
-function normalizePhone(raw) {
-  if (!raw) return "";
-  let phoneStr = String(raw).trim().replace(/\D/g, ""); // buang non-digit
-
-  // Kalau sudah +62 / 62 di depan
-  if (phoneStr.startsWith("62")) return phoneStr;
-  if (phoneStr.startsWith("0")) return "62" + phoneStr.slice(1);
-
-  // Kalau cuma "818xxx" (tanpa 0 di depan), tambahin 62
-  if (phoneStr.startsWith("8")) return "62" + phoneStr;
-
-  return phoneStr;
-}
-
-
 // ===========================
 // CREATE blast + enqueue
 // ===========================
@@ -281,10 +265,66 @@ router.post("/", authenticateToken, async (req, res) => {
     });
     console.log("🚀 Contacts diterima dari FE:", contacts);
     // 🔥 Recipients dipastikan nomor hp valid string
-    const recipients = (contacts || []).map((c) => {
-      const phone = normalizePhone(c.phone || c.waNumber);
+    // 🔧 Normalisasi dan validasi nomor
+    function normalizePhone(raw) {
+      if (!raw && raw !== 0) return "";
+      let phoneStr = String(raw).trim();
 
-      return {
+      // Deteksi format scientific (misal 8.82E+11) → langsung invalid
+      if (/e/i.test(phoneStr)) return "";
+
+      // Hapus karakter non-digit
+      phoneStr = phoneStr.replace(/\D/g, "");
+
+      // Invalid kalau terlalu pendek
+      if (!phoneStr || phoneStr.length < 9 || phoneStr.length > 15) return "";
+
+      // Formatkan prefix Indonesia
+      if (phoneStr.startsWith("62")) return phoneStr;
+      if (phoneStr.startsWith("0")) return "62" + phoneStr.slice(1);
+      if (phoneStr.startsWith("8")) return "62" + phoneStr;
+      return "";
+    }
+
+    // 🧩 Buat daftar recipients (valid + failed)
+    const recipients = [];
+    const failedRecipients = [];
+
+    for (const c of contacts || []) {
+      const rawInput = c.phone || c.waNumber;
+      if (!rawInput || String(rawInput).trim() === "") {
+        // ⚠️ Nomor kosong → di-skip total
+        continue;
+      }
+
+      const phone = normalizePhone(rawInput);
+
+        if (!phone) {
+        // ❌ Nomor rusak / format Excel salah → langsung tandai failed
+        failedRecipients.push({
+          phone: rawInput,
+          name: c.name || "-",
+          school: c.school || "",
+          kelas: c.kelas || "",
+          lulus: c.lulus || "",
+          status: "failed",
+          timestamps: { failedAt: new Date() },
+          error: {
+            code: "INVALID_NUMBER",
+            message: "Bukan Nomor WhatsApp (format salah atau rusak dari Excel)",
+          },
+        });
+
+        // ⚠️ Tambahan log agar mudah dilacak di terminal
+        console.warn(
+          `⚠️ Invalid nomor terdeteksi dari Excel: "${rawInput}" → ditandai failed (Bukan Nomor WhatsApp)`
+        );
+
+        continue;
+      }
+
+      // ✅ Nomor valid → masuk daftar untuk dikirim
+      recipients.push({
         phone,
         name: c.name || phone,
         school: c.school || "",
@@ -296,8 +336,16 @@ router.post("/", authenticateToken, async (req, res) => {
         birthdate: c.birthdate || "",
         status: "queued",
         timestamps: { queuedAt: new Date() },
-      };
-    });
+      });
+    }
+
+    if (recipients.length === 0 && failedRecipients.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        message: "Tidak ada nomor valid di file Excel.",
+      });
+    }
+
     console.log("🚀 Recipients final sebelum simpan:", recipients);
     if (maxPerDay && sentToday >= maxPerDay) {
       return res.status(400).json({
@@ -323,11 +371,12 @@ router.post("/", authenticateToken, async (req, res) => {
       recipients: [
         ...batchRecipients.map((r) => ({ ...r, status: "queued" })),
         ...deferredRecipients.map((r) => ({ ...r, status: "pending" })),
+        ...failedRecipients, // tambahkan failed langsung di DB
       ],
       totals: {
         queued: batchRecipients.length,
         sent: 0,
-        failed: 0,
+        failed: failedRecipients.length, // hitung failed awal
         delivered: 0,
         read: 0,
         cancelled: 0,
@@ -398,7 +447,7 @@ router.post("/", authenticateToken, async (req, res) => {
           index: idx, // index penerima di batch (penting untuk mode per_n)
         }
       );
-
+      
       // 📝 Simpan log pesan
       const log = await MessageLog.create({
         userId: req.user.id,
@@ -419,12 +468,14 @@ router.post("/", authenticateToken, async (req, res) => {
             name: toTitleCase(rec.name || rec.phone),
             school: (rec.school || "").toUpperCase(),
             kelas: (rec.kelas || "").toUpperCase(),
+            tahunLulus: rec.lulus || rec.tahunLulus || "",
             updatedAt: new Date(),
           },
           $setOnInsert: { createdAt: new Date() },
         },
         { upsert: true }
       );
+
 
       // 🚀 Tambah job ke queue (media atau teks)
       const jobBase = {

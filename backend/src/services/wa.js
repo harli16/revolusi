@@ -103,6 +103,7 @@ class SingleWASession extends EventEmitter {
     this.sock.ev.on("connection.update", async (u) => {
       const { connection, lastDisconnect, qr } = u;
 
+      // ===== QR muncul =====
       if (qr) {
         try {
           this.qrPng = await qrcode.toBuffer(qr, { width: 300, margin: 1 });
@@ -114,6 +115,7 @@ class SingleWASession extends EventEmitter {
         this.emit("qr", { at: this.qrAt });
       }
 
+      // ===== Koneksi terbuka =====
       if (connection === "open") {
         this.state = "CONNECTED";
         if (this.sock?.user) this.registered = true;
@@ -125,24 +127,50 @@ class SingleWASession extends EventEmitter {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
         }
+
+      // ===== Sedang menyambung =====
       } else if (connection === "connecting") {
         this.state = "CONNECTING";
+
+      // ===== Koneksi tertutup =====
       } else if (connection === "close") {
-        const reason =
+        const reasonCode =
           lastDisconnect?.error?.output?.statusCode ||
+          lastDisconnect?.error?.statusCode ||
+          lastDisconnect?.error?.code ||
+          0;
+        const reasonMsg =
           lastDisconnect?.error?.message ||
           String(lastDisconnect?.error || "unknown");
 
-        logger.warn({ userId: this.userId, reason }, "WA connection closed");
+        logger.warn({ userId: this.userId, reasonCode, reasonMsg }, "WA connection closed");
+
         this.state = "DISCONNECTED";
         this.qrPng = null;
         this.qrAt = 0;
         this.initPromise = null;
 
+        // 🧹 kalau logout atau unauthorized (401) → hapus session lama
+        if (reasonCode === 401 || reasonMsg.toLowerCase().includes("logout") || reasonMsg.toLowerCase().includes("loggedout")) {
+          const tokensDir = cfg.tokensDir || "./tokens";
+          const authDir = path.join(tokensDir, String(this.userId), "baileys_auth");
+          try {
+            fs.rmSync(authDir, { recursive: true, force: true });
+            logger.info({ userId: this.userId }, "🧹 Deleted old Baileys session (logged out)");
+          } catch (err) {
+            logger.error({ err: String(err), userId: this.userId }, "Failed to delete old session");
+          }
+
+          if (io) io.to(this.userId.toString()).emit("wa:disconnected");
+        }
+
+        // 🔄 auto reconnect biar QR baru langsung muncul
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-        const delay = 1500 + Math.floor(Math.random() * 1000);
+        const delay = 2000 + Math.floor(Math.random() * 2000);
         this.reconnectTimer = setTimeout(() => {
-          this._init().catch((e) => logger.error({ e: String(e) }, "WA re-init failed"));
+          this._init().catch((e) =>
+            logger.error({ e: String(e) }, "WA re-init failed")
+          );
           this.reconnectTimer = null;
         }, delay);
       }

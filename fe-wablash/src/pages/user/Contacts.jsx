@@ -34,6 +34,7 @@ export default function Contacts() {
   const [search, setSearch] = useState("");
   const [school, setSchool] = useState("");
   const [kelas, setKelas] = useState("");
+  const [tahun, setTahun] = useState("");
   const [file, setFile] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -53,7 +54,7 @@ export default function Contacts() {
     try {
       const res = await api.get("/api/contacts", {
         headers: { Authorization: `Bearer ${token}` },
-        params: { search, school, kelas },
+        params: { search, school, kelas, tahun },
       });
       if (res.data.ok) {
         setContacts(res.data.items || []);
@@ -81,12 +82,20 @@ export default function Contacts() {
     return [...new Set(arr.filter((v) => v))];
   }, [contacts]);
 
+  const uniqueYears = useMemo(() => {
+    const arr = contacts
+      .map((c) => (c.tahunLulus ?? "").toString().trim())
+      .filter(Boolean);
+    return [...new Set(arr)].sort(); // urut asc
+  }, [contacts]);
+
+
   useEffect(() => {
     const t = setTimeout(() => {
       if (token) fetchContacts();
     }, 300);
     return () => clearTimeout(t);
-  }, [token, search, school, kelas]);
+  }, [token, search, school, kelas, tahun]);
 
   // ==========================
   // Export contacts
@@ -242,6 +251,7 @@ export default function Contacts() {
     setSchool("");
     setKelas("");
     setSearch("");
+    setTahun("");
   };
 
   // ==========================
@@ -275,6 +285,7 @@ export default function Contacts() {
             ))}
           </select>
 
+          {/* Kelas */}
           <select
             value={kelas}
             onChange={(e) => setKelas(e.target.value)}
@@ -285,6 +296,19 @@ export default function Contacts() {
               <option key={k} value={k}>{k}</option>
             ))}
           </select>
+
+          {/* Tahun Lulus */}
+          <select
+            value={tahun}
+            onChange={(e) => setTahun(e.target.value)}
+            className="border border-gray-300 rounded-md p-2 text-sm bg-white"
+          >
+            <option value="">Semua Tahun</option>
+            {uniqueYears.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+
 
           <button
             onClick={resetFilter}
@@ -345,6 +369,7 @@ export default function Contacts() {
                     <th className="px-6 py-3">Nomor WA</th>
                     <th className="px-6 py-3 hidden lg:table-cell">Asal Sekolah</th>
                     <th className="px-6 py-3 hidden lg:table-cell">Kelas</th>
+                    <th className="px-6 py-3 hidden lg:table-cell">Tahun Lulus</th>
                     <th className="px-6 py-3 hidden md:table-cell">Terakhir Diperbarui</th>
                     <th className="px-6 py-3 text-center">Aksi</th>
                   </tr>
@@ -379,6 +404,7 @@ export default function Contacts() {
                       </td>
                       <td className="px-6 py-4 hidden lg:table-cell">{(c.school || "-").toUpperCase()}</td>
                       <td className="px-6 py-4 hidden lg:table-cell">{(c.kelas || "-").toUpperCase()}</td>
+                      <td className="px-6 py-4 hidden lg:table-cell">{(c.tahunLulus || "-").toUpperCase()}</td>
                       <td className="px-6 py-4 hidden md:table-cell">
                         {new Date(c.updatedAt).toLocaleString("id-ID")}
                       </td>

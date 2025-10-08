@@ -430,6 +430,7 @@ useEffect(() => {
           school: r.school || "",
           lulus: r.lulus || "",
           beasiswa: r.beasiswa || "",
+          tahunLulus: r.lulus || r.tahunLulus || "",
           kelas: r.kelas || "",
           prestasi: r.prestasi || "",
           orangtua: r.orangtua || "",
@@ -504,18 +505,21 @@ useEffect(() => {
       // mapping data sesuai kolom di Excel
       const mapped = rows.map((row) => {
         const fullname = toTitleCase(row["NAMA LENGKAP"] || row["Nama"] || row["fullname"] || "");
+        const tahunLulus = row["TAHUN LULUS"] || row["LULUS"] || row["Tahun Lulus"] || "";
         return {
-          phone: row["NO HANDPHONE"] || row["Handphone"] || row["HP"] || "", // 🔥 WAJIB
+          phone: row["NO HANDPHONE"] || row["Handphone"] || row["HP"] || "",
           name: fullname,
           school: toTitleCase(row["ASAL SEKOLAH"] || row["Sekolah"] || ""),
           kelas: toTitleCase(row["KELAS"] || ""),
-          lulus: row["LULUS"] || row["Tahun Lulus"] || "",
-          beasiswa: toUpper(row["KODE BEASISWA"] || row["Beasiswa"] || ""), // 🔥 CAPSLOCK only
+          tahunLulus, // ✅ pakai field fix
+          lulus: tahunLulus, // biar backward-compatible ke BE lama
+          beasiswa: toUpper(row["KODE BEASISWA"] || row["Beasiswa"] || ""),
           prestasi: toTitleCase(row["PRESTASI"] || ""),
           orangtua: toTitleCase(row["PEKERJAAN ORANGTUA"] || row["Orangtua"] || ""),
           birthdate: formatDate(row["TANGGAL LAHIR"] || row["Tanggal Lahir"] || ""),
         };
       });
+
 
       setRecipients(mapped);
       console.log("✅ Kontak berhasil dimuat:", mapped.length, "kontak");
@@ -558,7 +562,7 @@ useEffect(() => {
       .replace(/{{school}}/g, data.school || "")
       .replace(/{{beasiswa}}/g, data.beasiswa || "")
       .replace(/{{kelas}}/g, data.kelas || "")
-      .replace(/{{lulus}}/g, data.lulus || "")
+      .replace(/{{tahunLulus}}/g, data.tahunLulus || "")
       .replace(/{{prestasi}}/g, data.prestasi || "")
       .replace(/{{orangtua}}/g, data.orangtua || "");
   };
