@@ -31,6 +31,7 @@ const CustomModal = ({ isOpen, onClose, title, children }) => {
 export default function Contacts() {
   const { token } = useAuth();
   const [contacts, setContacts] = useState([]);
+  const [schoolsList, setSchoolsList] = useState([]);
   const [search, setSearch] = useState("");
   const [school, setSchool] = useState("");
   const [kelas, setKelas] = useState("");
@@ -45,6 +46,13 @@ export default function Contacts() {
   const [isLoading, setIsLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
   const [modal, setModal] = useState({ isOpen: false, type: "", data: null });
+  
+  // ==========================
+  // Tambah Kontak Manual (modal)
+  // ==========================
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [addNumber, setAddNumber] = useState("");
 
   // ==========================
   // Fetch contacts (with filters)
@@ -56,8 +64,10 @@ export default function Contacts() {
         headers: { Authorization: `Bearer ${token}` },
         params: { search, school, kelas, tahun },
       });
+
       if (res.data.ok) {
-        setContacts(res.data.items || []);
+        // ✅ Gunakan fallback antara data/items
+        setContacts(res.data.data || res.data.items || []);
       }
     } catch (err) {
       console.error("❌ Error fetch contacts:", err);
@@ -71,24 +81,55 @@ export default function Contacts() {
     }
   };
 
-  // ambil unique list untuk dropdown
-  const uniqueSchools = useMemo(() => {
-    const arr = contacts.map((c) => (c.school || "").trim().toUpperCase());
-    return [...new Set(arr.filter((v) => v))];
-  }, [contacts]);
+  // ==========================
+  // Ambil unique list untuk dropdown
+  // ==========================
+  // const uniqueSchools = useMemo(() => {
+  //   // Ambil semua nama sekolah unik dari contacts
+  //   const arr = contacts.map((c) =>
+  //     (c.school || "").trim().toUpperCase()
+  //   );
+
+  //   // Hilangkan duplikat + kosong
+  //   const unique = [...new Set(arr.filter(Boolean))];
+
+  //   // Urut abjad biar rapi
+  //   return unique.sort();
+  // }, [contacts]);
 
   const uniqueClasses = useMemo(() => {
-    const arr = contacts.map((c) => (c.kelas || "").trim().toUpperCase());
-    return [...new Set(arr.filter((v) => v))];
+    const arr = contacts.map((c) =>
+      (c.kelas || "").trim().toUpperCase()
+    );
+    const unique = [...new Set(arr.filter(Boolean))];
+    return unique.sort();
   }, [contacts]);
 
   const uniqueYears = useMemo(() => {
     const arr = contacts
       .map((c) => (c.tahunLulus ?? "").toString().trim())
       .filter(Boolean);
-    return [...new Set(arr)].sort(); // urut asc
+    const unique = [...new Set(arr)];
+    return unique.sort(); // urut asc
   }, [contacts]);
 
+  // ==========================
+  // Ambil daftar sekolah (global function)
+  // ==========================
+  const fetchSchools = async () => {
+    try {
+      const res = await api.get("/api/contacts/schools", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.data.ok) setSchoolsList(res.data.data);
+    } catch (err) {
+      console.error("❌ Error ambil daftar sekolah:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (token) fetchSchools();
+  }, [token]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -106,7 +147,9 @@ export default function Contacts() {
       const res = await api.get("/api/contacts/export", {
         headers: { Authorization: `Bearer ${token}` },
         responseType: "blob",
+        params: { search, school, kelas, tahun }, // 🔥 tambahkan filter aktif
       });
+
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement("a");
       link.href = url;
@@ -114,12 +157,14 @@ export default function Contacts() {
       document.body.appendChild(link);
       link.click();
       link.remove();
+
       setModal({
         isOpen: true,
         type: "success",
         data: { message: "Kontak berhasil diekspor." },
       });
-    } catch {
+    } catch (err) {
+      console.error("❌ Error export:", err);
       setModal({
         isOpen: true,
         type: "error",
@@ -145,6 +190,7 @@ export default function Contacts() {
     const formData = new FormData();
     formData.append("file", selectedFile);
     setActionLoading("import");
+
     try {
       const res = await api.post("/api/contacts/import", formData, {
         headers: {
@@ -152,15 +198,27 @@ export default function Contacts() {
           "Content-Type": "multipart/form-data",
         },
       });
+
       if (res.data.ok) {
+        // ✅ Tampilkan notifikasi sukses
         setModal({
           isOpen: true,
           type: "success",
           data: { message: `Berhasil mengimpor ${res.data.imported} kontak.` },
         });
-        fetchContacts();
+
+        // ✅ Reset filter agar semua data sekolah muncul lagi
+        setSchool("");
+        setKelas("");
+        setTahun("");
+        setSearch("");
+
+        // ✅ Fetch ulang semua kontak tanpa filter
+        await fetchContacts();
+        await fetchSchools();
       }
-    } catch {
+    } catch (err) {
+      console.error("❌ Import error:", err);
       setModal({
         isOpen: true,
         type: "error",
@@ -169,11 +227,13 @@ export default function Contacts() {
         },
       });
     } finally {
+      // ✅ Reset state upload
       setFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       setActionLoading(null);
     }
   };
+
 
   // ==========================
   // Edit/Delete contact
@@ -260,8 +320,11 @@ export default function Contacts() {
   return (
     <div className="bg-gray-100 min-h-screen text-gray-800 font-sans p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
-        <header className="mb-6">
+        <header className="mb-6 flex items-center justify-between">
           <h1 className="text-3xl font-bold text-gray-900">Daftar Kontak</h1>
+          <span className="text-sm text-gray-600">
+            Total kontak: <strong>{contacts.length}</strong>
+          </span>
         </header>
 
         {/* FILTER & ACTIONS */}
@@ -280,7 +343,7 @@ export default function Contacts() {
             className="border border-gray-300 rounded-md p-2 text-sm bg-white"
           >
             <option value="">Semua Sekolah</option>
-            {uniqueSchools.map((s) => (
+            {schoolsList.map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
           </select>
@@ -341,6 +404,12 @@ export default function Contacts() {
             >
               <FileUp size={18} />
               <span>Import</span>
+            </button>
+            <button
+              onClick={() => setIsAddModalOpen(true)}
+              className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition"
+            >
+              <span>+ Tambah Kontak</span>
             </button>
           </div>
         </div>
@@ -471,6 +540,165 @@ export default function Contacts() {
                 Hapus
               </button>
             </div>
+          </CustomModal>
+        )}
+        {/* MODAL TAMBAH KONTAK */}
+        {isAddModalOpen && (
+          <CustomModal
+            isOpen={isAddModalOpen}
+            onClose={() => setIsAddModalOpen(false)}
+            title="Tambah Kontak Manual"
+          >
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const formData = {
+                  name: addName.trim(),
+                  waNumber: addNumber.trim(),
+                  school,
+                  kelas,
+                  tahunLulus: tahun,
+                };
+
+                if (!formData.name || !formData.waNumber) {
+                  alert("Nama dan Nomor WA wajib diisi!");
+                  return;
+                }
+
+                setActionLoading("add");
+                try {
+                  const res = await api.post("/api/contacts", formData, {
+                    headers: { Authorization: `Bearer ${token}` },
+                  });
+
+                  if (res.data.ok) {
+                    setContacts((prev) => [...prev, res.data.data]);
+                    setAddName("");
+                    setAddNumber("");
+                    setIsAddModalOpen(false);
+                    setModal({
+                      isOpen: true,
+                      type: "success",
+                      data: { message: "Kontak berhasil ditambahkan." },
+                    });
+                  }
+                } catch (err) {
+                  console.error("❌ Error tambah kontak:", err);
+                  setModal({
+                    isOpen: true,
+                    type: "error",
+                    data: { message: "Gagal menambah kontak." },
+                  });
+                } finally {
+                  setActionLoading(null);
+                }
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nama
+                </label>
+                <input
+                  type="text"
+                  value={addName}
+                  onChange={(e) => setAddName(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md p-2 text-sm"
+                  placeholder="Masukkan nama kontak"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nomor WhatsApp
+                </label>
+                <input
+                  type="text"
+                  value={addNumber}
+                  onChange={(e) => {
+                    // hanya izinkan angka
+                    const val = e.target.value.replace(/[^0-9]/g, "");
+                    setAddNumber(val);
+                  }}
+                  className="w-full border border-gray-300 rounded-md p-2 text-sm"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="Contoh: 6281234567890"
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Sekolah
+                  </label>
+                  <select
+                    value={school}
+                    onChange={(e) => setSchool(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md p-2 text-sm"
+                  >
+                    <option value="">Pilih Sekolah</option>
+                    {schoolsList.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Kelas
+                  </label>
+                  <select
+                    value={kelas}
+                    onChange={(e) => setKelas(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md p-2 text-sm"
+                  >
+                    <option value="">Pilih Kelas</option>
+                    {uniqueClasses.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Tahun Lulus
+                  </label>
+                  <select
+                    value={tahun}
+                    onChange={(e) => setTahun(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md p-2 text-sm"
+                  >
+                    <option value="">Pilih Tahun</option>
+                    {uniqueYears.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="px-4 py-2 rounded bg-gray-300 hover:bg-gray-400 text-gray-800"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === "add"}
+                  className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {actionLoading === "add" ? "Menyimpan..." : "Simpan"}
+                </button>
+              </div>
+            </form>
           </CustomModal>
         )}
       </div>

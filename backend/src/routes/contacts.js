@@ -16,6 +16,40 @@ router.use(authenticateToken);
 
 /**
  * ===========================
+ * Tambah kontak manual
+ * ===========================
+ */
+router.post("/", async (req, res) => {
+  try {
+    const { name, waNumber, school, kelas, tahunLulus } = req.body;
+    if (!waNumber || !name) {
+      return res.status(400).json({ ok: false, message: "Nama dan nomor wajib diisi." });
+    }
+
+    // Standarisasi nomor WA (otomatis ganti 0 -> 62)
+    let cleanNumber = waNumber.replace(/\D/g, "");
+    if (cleanNumber.startsWith("0")) {
+      cleanNumber = "62" + cleanNumber.slice(1);
+    }
+
+    const contact = await Contact.create({
+      userId: req.user.id,
+      name: toTitleCase(name),
+      waNumber: cleanNumber,
+      school: toTitleCase(school || ""),
+      kelas: kelas || "",
+      tahunLulus: tahunLulus || "",
+    });
+
+    res.json({ ok: true, data: contact });
+  } catch (err) {
+    console.error("❌ Gagal menambah kontak manual:", err);
+    res.status(500).json({ ok: false, message: "Gagal menambah kontak." });
+  }
+});
+
+/**
+ * ===========================
  * Ambil list kontak
  * ===========================
  */
@@ -27,7 +61,7 @@ router.get("/", async (req, res) => {
   });
 
   try {
-    const { search, school, kelas, tahun, page = 1, limit = 20 } = req.query;
+    const { search, school, kelas, tahun, page = 1, limit = 5000 } = req.query;
     const q = {};
 
     if (req.user.role !== "admin") {
@@ -87,24 +121,93 @@ router.get("/", async (req, res) => {
  * Export kontak ke CSV
  * ===========================
  */
+/**
+ * ===========================
+ * Export kontak ke CSV (pakai filter aktif)
+ * ===========================
+ */
 router.get("/export", async (req, res) => {
+  try {
+    const { search, school, kelas, tahun } = req.query;
+    const q = {};
+
+    // 🔐 Batasi per user (kecuali admin)
+    if (req.user.role !== "admin") {
+      q.userId = new mongoose.Types.ObjectId(req.user.id);
+    }
+
+    // 🔍 Terapkan filter jika dikirim dari FE
+    if (search) {
+      q.$or = [
+        { waNumber: new RegExp(search, "i") },
+        { name: new RegExp(search, "i") },
+      ];
+    }
+
+    if (school) {
+      q.school = new RegExp(`^${school}$`, "i");
+    }
+
+    if (kelas) {
+      q.kelas = new RegExp(`^${kelas}$`, "i");
+    }
+
+    if (tahun) {
+      q.tahunLulus = new RegExp(`^${tahun}$`, "i");
+    }
+
+    console.log("📤 Filter export yang digunakan:", q);
+
+    // 🧾 Ambil data sesuai filter
+    const contacts = await Contact.find(q).sort({ name: 1 }).lean();
+
+    // 🎯 Format kolom ekspor (header + mapping)
+    const fields = [
+      { label: "Nomor WA", value: "waNumber" },
+      { label: "Nama Lengkap", value: "name" },
+      { label: "Asal Sekolah", value: "school" },
+      { label: "Kelas", value: "kelas" },
+      { label: "Tahun Lulus", value: "tahunLulus" },
+    ];
+
+    const parser = new Parser({ fields });
+    const csv = parser.parse(contacts);
+
+    // 📦 Kirim file hasil ekspor
+    res.header("Content-Type", "text/csv");
+    res.attachment("contacts_filtered.csv");
+    return res.send(csv);
+  } catch (err) {
+    console.error("❌ Error export contacts:", err);
+    res.status(500).json({ ok: false, message: "Gagal export kontak" });
+  }
+})
+
+/**
+ * ===========================
+ * Ambil daftar sekolah unik (per user)
+ * ===========================
+ */
+router.get("/schools", async (req, res) => {
   try {
     const q = {};
     if (req.user.role !== "admin") {
       q.userId = new mongoose.Types.ObjectId(req.user.id);
     }
 
-    const contacts = await Contact.find(q).lean();
-    const fields = ["waNumber", "name"];
-    const parser = new Parser({ fields });
-    const csv = parser.parse(contacts);
+    // Ambil daftar sekolah unik berdasarkan user
+    const schools = await Contact.distinct("school", q);
 
-    res.header("Content-Type", "text/csv");
-    res.attachment("contacts.csv");
-    return res.send(csv);
+    // Bersihkan data: buang kosong/null, ubah ke huruf besar semua, urutkan abjad
+    const clean = schools
+      .filter((s) => s && s.trim() !== "")
+      .map((s) => s.trim().toUpperCase())
+      .sort();
+
+    res.json({ ok: true, data: clean });
   } catch (err) {
-    console.error("❌ Error export contacts:", err);
-    res.status(500).json({ ok: false, message: "Gagal export kontak" });
+    console.error("❌ Error get distinct schools:", err);
+    res.status(500).json({ ok: false, message: "Gagal ambil daftar sekolah" });
   }
 });
 
