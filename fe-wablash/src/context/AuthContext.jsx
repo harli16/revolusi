@@ -46,7 +46,7 @@ export const AuthProvider = ({ children }) => {
 
         // 🔥 connect socket & join room
         socket.connect();
-        socket.emit("join", userData.id);
+        // socket.emit("join", userData.id);
         console.log("✅ Joined socket room:", userData.id);
 
         return true;
@@ -86,7 +86,7 @@ export const AuthProvider = ({ children }) => {
 
         // 🔥 pastikan socket join kalau refresh / reload
         socket.connect();
-        socket.emit("join", userData.id);
+        // socket.emit("join", userData.id);
         console.log("✅ Joined socket room:", userData.id);
       }
     } catch (err) {

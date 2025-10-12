@@ -52,16 +52,28 @@ router.get("/history/:waNumber", async (req, res) => {
       if (log.providerId) logMap[log.providerId] = log;
     });
 
-    // Gabungkan status ke chat out
+    // Gabungkan status ke chat out (utamakan data dari Chat)
     const result = chats.map((c) => {
-      let status = "pending";
-      let providerId = null;
+      // ambil nilai asli dari Chat dulu
+      let status = c.status || "pending";
+      let providerId = c.providerId || null;
 
       if (c.direction === "out") {
-        const log = logs.find((l) => l.message === c.message && l.to === waNumber);
-        if (log) {
-          status = log.status || "pending";
-          providerId = log.providerId;
+        // Kalau punya providerId dan ada di logMap → sinkronin status
+        if (providerId && logMap[providerId]) {
+          status = logMap[providerId].status || status;
+        } else {
+          // fallback: cari log manual berdasarkan pesan & tujuan
+          const log = logs.find(
+            (l) =>
+              l.to === waNumber &&
+              l.message === c.message &&
+              String(l.userId) === String(userObjectId)
+          );
+          if (log) {
+            status = log.status || status;
+            providerId = providerId || log.providerId || null;
+          }
         }
       }
 
@@ -114,13 +126,40 @@ router.post("/send", upload.single("file"), async (req, res) => {
       sent = await wa.sendText(req.user.id, waNumber, message);
     }
 
+    // ✅ Ambil providerId (dari Baileys response)
+    const providerId = sent?.key?.id || sent?.providerId || null;
+
+    // ✅ Simpan ke Chat DB
+    await Chat.create({
+      userId: req.user.id,
+      waNumber,
+      message: message || (file ? "[Media]" : ""),
+      direction: "out",
+      providerId,
+      status: "sent", // langsung set sent
+      read: false,
+      assignedTo: req.user.id,
+    });
+
+    // ✅ Emit event realtime ke FE (optional)
+    if (req.io) {
+      req.io.to(req.user.id.toString()).emit("chat:new", {
+        waNumber,
+        message,
+        direction: "out",
+        providerId,
+        status: "sent",
+        fromSelf: true,
+      });
+    }
+
     res.json({
       ok: true,
       data: {
         waNumber,
         message: message || (file ? "[Media]" : ""),
         direction: "out",
-        providerId: sent?.providerId || null,
+        providerId,
       },
     });
   } catch (err) {

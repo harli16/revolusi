@@ -117,11 +117,15 @@ export default function LiveChat({ mini = false }) {
       const res = await api.get(`/api/chat/history/${waNumber}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+
       if (res.data.ok) {
         const normalized = res.data.data.map((m) => ({
           ...m,
           direction: m.direction || (m.fromSelf ? "out" : "in"),
+          status: m.status || "pending", // ✅ ambil status dari backend (centang)
+          providerId: m.providerId || null, // ✅ jaga providerId tetap ada
         }));
+
         setMessages(normalized);
       }
 
@@ -140,34 +144,29 @@ export default function LiveChat({ mini = false }) {
     }
   };
 
-  // ==========================
-  // Kirim pesan (teks / file)
-  // ==========================
-  const sendMessage = async () => {
-    if ((!newMessage.trim() && !selectedFile) || !activeContact) return;
-
-    try {
-      const formData = new FormData();
-      formData.append("waNumber", activeContact);
-      if (newMessage.trim()) formData.append("message", newMessage);
-      if (selectedFile) formData.append("file", selectedFile);
-
-      await api.post("/api/chat/send", formData, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      setNewMessage("");
-      setSelectedFile(null);
-      setShowEmojiPicker(false);
-    } catch (err) {
-      console.error("❌ Error send message:", err);
-    }
-  };
 
   // ==========================
-  // Socket listener
+  // Socket listener (FINAL FIXED)
   // ==========================
   useEffect(() => {
+    // Pastikan socket connect
+    // if (!socket.connected) socket.connect();
+    // ✅ Join ke room user
+    if (user?._id || user?.id) {
+      socket.emit("join", user?._id || user?.id);
+      console.log("✅ Joined socket room:", user?._id || user?.id);
+    }
+
+    // Debug koneksi
+    socket.on("connect", () => console.log("✅ Socket connected"));
+    socket.on("disconnect", (r) => console.log("❌ Socket disconnected:", r));
+
+    // 🔥 Debug semua event
+    socket.onAny((event, data) => {
+      console.log("📩 SOCKET EVENT:", event, data);
+    });
+
+    // ✅ Realtime pesan baru
     socket.on("chat:new", (payload) => {
       const {
         id,
@@ -183,32 +182,36 @@ export default function LiveChat({ mini = false }) {
         status,
       } = payload;
 
-      if (waNumber === activeContact) {
-        setMessages((prev) => {
-          const exists = id && prev.some((m) => m.id === id);
-          if (exists) return prev;
-          return [
-            ...prev,
-            {
-              id,
-              providerId,
-              waNumber,
-              message: message || text,
-              createdAt: createdAt || new Date(),
-              direction: direction || (fromSelf ? "out" : "in"),
-              status: status || "pending",
-            },
-          ];
-        });
+      // ❗Lewatin kalau pesan keluar (outgoing)
+      if (fromSelf || direction === "out") return;
 
-        api.post(`/api/chat/read/${waNumber}`, {}, {
-          headers: { Authorization: `Bearer ${token}` },
-        }).catch((err) => console.error("❌ Failed to mark realtime as read:", err));
-      }
+      setMessages((prev) => {
+        const exists =
+          (id && prev.some((m) => m.id === id)) ||
+          (providerId && prev.some((m) => m.providerId === providerId));
+        if (exists) return prev;
 
+        return [
+          ...prev,
+          {
+            id,
+            providerId,
+            waNumber,
+            message: message || text,
+            createdAt: createdAt || new Date(),
+            direction: direction || (fromSelf ? "out" : "in"),
+            status: status || "pending",
+          },
+        ];
+      });
+
+      // ✅ Update daftar kontak (badge)
       setContacts((prev) => {
         const filtered = prev.filter((c) => c._id !== waNumber);
         const existing = prev.find((c) => c._id === waNumber);
+
+        // ❗ Kalau sedang buka obrolan ini, jangan tambah unread
+        const isActive = activeContact === waNumber;
 
         const updated = [
           {
@@ -216,37 +219,103 @@ export default function LiveChat({ mini = false }) {
             name: waName || existing?.name || waNumber,
             lastMessage: message || text,
             lastAt: createdAt || ts || new Date(),
-            unread: waNumber === activeContact
-              ? 0
-              : (existing?.unread || 0) + 1,
+            unread: isActive ? 0 : (existing?.unread || 0) + 1,
           },
           ...filtered,
         ];
-
         return updated.sort(
           (a, b) => new Date(b.lastAt) - new Date(a.lastAt)
         );
       });
+
+      // ✅ Kalau chat aktif, langsung mark read tanpa nambah badge
+      if (activeContact === waNumber) {
+        api
+          .post(`/api/chat/read/${waNumber}`, {}, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          .catch((err) => console.error("❌ Failed mark read:", err));
+      }
     });
 
-    socket.on("message:status", ({ providerId, status }) => {
+    // ✅ Realtime update status centang
+    socket.on("message:status", ({ providerId, status, phone }) => {
+      console.log("📬 Update status masuk:", { providerId, status, phone });
+
       setMessages((prev) =>
-        prev.map((m) =>
-          m.providerId === providerId ? { ...m, status } : m
-        )
+        prev.map((m) => {
+          const sameProvider =
+            (m.providerId || "").toLowerCase() === (providerId || "").toLowerCase();
+          const samePhone =
+            phone && m.waNumber === phone && m.direction === "out";
+
+          if (sameProvider || samePhone) {
+            return {
+              ...m,
+              status,
+              read:
+                status === "read" || status === "played" ? true : m.read,
+            };
+          }
+          return m;
+        })
       );
     });
 
+    // Cleanup listener sekali aja
     return () => {
       socket.off("chat:new");
       socket.off("message:status");
+      socket.offAny();
     };
-  }, [activeContact, token]);
+  }, []); // ⬅️ penting: dependency kosong, biar listener cuma sekali aja
 
   // Auto-scroll tiap ada message baru
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // ==========================
+  // Kirim pesan (teks / file)
+  // ==========================
+  const sendMessage = async () => {
+    if ((!newMessage.trim() && !selectedFile) || !activeContact) return;
+
+    try {
+      const formData = new FormData();
+      formData.append("waNumber", activeContact);
+      if (newMessage.trim()) formData.append("message", newMessage);
+      if (selectedFile) formData.append("file", selectedFile);
+
+      const res = await api.post("/api/chat/send", formData, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      console.log("🚀 Kirim pesan hasil backend:", res.data.data);
+
+      // ✅ Tambahkan providerId biar bisa diupdate statusnya
+      if (res.data.ok && res.data.data) {
+        const { waNumber, message, providerId } = res.data.data;
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            waNumber,
+            message,
+            direction: "out",
+            providerId: providerId,
+            status: "pending",
+            createdAt: new Date(),
+          },
+        ]);
+      }
+
+      setNewMessage("");
+      setSelectedFile(null);
+      setShowEmojiPicker(false);
+    } catch (err) {
+      console.error("❌ Error send message:", err);
+    }
+  };
 
   // ==========================
   // Render
@@ -387,7 +456,7 @@ export default function LiveChat({ mini = false }) {
           <div className="flex-1 p-4 overflow-y-auto space-y-3 chat-bg bg-gray-200">
             {messages.map((m, idx) => (
               <div
-                key={m._id || m.id || idx}
+                key={(m.providerId || m._id || m.id || idx) + m.status}
                 className={`flex ${m.direction === "out" ? "justify-end" : ""}`}
               >
                 <div
@@ -405,13 +474,32 @@ export default function LiveChat({ mini = false }) {
                           })
                         : ""}
                     </span>
+
                     {m.direction === "out" && (
-                      <span className="text-xs">
-                        {m.status === "pending" && "Terkirim"}
-                        {m.status === "sent" && "✓"}
-                        {m.status === "delivered" && "✓✓"}
-                        {m.status === "read" && <span className="text-blue-500">✓✓</span>}
-                        {m.status === "played" && "Terkirim"}
+                      <span className="text-xs ml-1 select-none">
+                        {(() => {
+                          const st = (m.status || "pending").toLowerCase();
+
+                          if (st === "pending") return "⏳";
+                          if (st === "sent") return "✓";
+
+                          // delivered = dua centang abu (belum dibuka)
+                          if (st === "delivered")
+                            return <span className="text-blue-500">✓✓</span>;
+
+                          // read = dua centang biru
+                          if (st === "read")
+                            return <span className="text-gray-600">✓✓</span>;
+
+                          // played = dua centang biru juga
+                          if (st === "played")
+                            return <span className="text-blue-500">✓✓</span>;
+
+                          if (st === "failed")
+                            return <span className="text-red-500">❌</span>;
+
+                          return null;
+                        })()}
                       </span>
                     )}
                   </div>
@@ -602,7 +690,7 @@ export default function LiveChat({ mini = false }) {
               <div className="flex-1 p-6 overflow-y-auto space-y-3 chat-bg">
                 {Array.isArray(messages) && messages.length > 0 ? (
                   messages.map((m, idx) => (
-                    <div key={m._id || m.id || idx} className={`flex ${m.direction === "out" ? "justify-end" : ""}`}>
+                    <div key={`${m.providerId || m._id || m.id || idx}-${m.status}-${m.direction}`} className={`flex ${m.direction === "out" ? "justify-end" : ""}`}>
                       <div
                         className={`rounded-lg p-3 max-w-[80%] shadow ${
                           m.direction === "out" ? "bg-[#dcf8c6]" : "bg-white"
@@ -611,7 +699,43 @@ export default function LiveChat({ mini = false }) {
                         <p className="text-gray-800">
                           {typeof m.message === "string" ? m.message : JSON.stringify(m.message)}
                         </p>
-                        {/* timestamp & status tetap */}
+                        <div className="flex items-center justify-end gap-1 mt-1">
+                          <span className="text-xs text-gray-400">
+                            {m.createdAt
+                              ? new Date(m.createdAt).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              : ""}
+                          </span>
+                          {m.direction === "out" && (
+                            <span className="text-xs ml-1 select-none">
+                              {(() => {
+                                const st = (m.status || "pending").toLowerCase();
+
+                                if (st === "pending") return "⏳";
+                                if (st === "sent") return "✓";
+
+                                // 🧠 delivered = target sedang di obrolan ⇒ tampil biru
+                                if (st === "delivered")
+                                  return <span className="text-blue-500">✓✓</span>;
+
+                                // read = dua centang abu
+                                if (st === "read")
+                                  return <span className="text-gray-600">✓✓</span>;
+
+                                // played = dua centang biru
+                                if (st === "played")
+                                  return <span className="text-blue-500">✓✓</span>;
+
+                                if (st === "failed")
+                                  return <span className="text-red-500">❌</span>;
+
+                                return null;
+                              })()}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))

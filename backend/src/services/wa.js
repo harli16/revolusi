@@ -187,6 +187,11 @@ class SingleWASession extends EventEmitter {
 
         const waNumber = String(from).split("@")[0];
 
+        // 🚫 Skip kalau pesan dari user sendiri (outgoing)
+        // ⚙️ Fix untuk multi-device: hanya skip kalau benar-benar dari kita
+        if (m.key.fromMe && !m.key.participant) return;
+
+        // ====== Ambil isi pesan / caption / media label
         const text =
           m.message?.conversation ||
           m.message?.extendedTextMessage?.text ||
@@ -196,41 +201,78 @@ class SingleWASession extends EventEmitter {
           "";
 
         const mediaLabel =
-          m.message?.imageMessage ? "[Image]" :
-          m.message?.videoMessage ? "[Video]" :
-          m.message?.documentMessage ? "[Document]" :
-          m.message?.audioMessage ? "[Audio]" :
-          null;
+          m.message?.imageMessage
+            ? "[Image]"
+            : m.message?.videoMessage
+            ? "[Video]"
+            : m.message?.documentMessage
+            ? "[Document]"
+            : m.message?.audioMessage
+            ? "[Audio]"
+            : null;
 
         const content = text || mediaLabel || "";
+        if (!content) return; // 🚫 Lewat kalau gak ada isi pesan
 
-        if (!m.key.fromMe && content) {
-          const contact = await Contact.findOne({
-            userId: this.userId,
-            waNumber,
-          }).lean();
+        // ====== Cek kontak di DB
+        const contact = await Contact.findOne({
+          userId: this.userId,
+          waNumber,
+        }).lean();
 
-          // simpan pesan masuk (read:false)
-          const chat = await Chat.create({
-            userId: this.userId,
-            waNumber,
-            message: content,
-            direction: "in",
-            read: false,
+        // ====== Cegah duplikat berlebihan (misal "Ok" dikirim 2x cepat)
+        const fiveSecondsAgo = new Date(Date.now() - 5000);
+        const exists = await Chat.findOne({
+          userId: this.userId,
+          waNumber,
+          message: content,
+          direction: "in",
+          createdAt: { $gte: fiveSecondsAgo }, // cuma skip kalau muncul dalam 5 detik terakhir
+        });
+
+        if (exists) {
+          console.log("⏩ Skip duplikat pesan masuk (5s window):", content);
+          return;
+        }
+
+        // ====== Simpan pesan masuk
+        const chat = await Chat.create({
+          userId: this.userId,
+          waNumber,
+          message: content,
+          direction: "in",
+          read: false,
+        });
+
+        // ====== Emit realtime ke FE (live chat)
+        if (io) {
+          io.to(this.userId.toString()).emit("chat:new", {
+            ...(chat.toObject?.() ?? {
+              userId: this.userId,
+              waNumber,
+              message: content,
+              direction: "in",
+              read: false,
+            }),
+            waName: contact?.name || m.pushName || waNumber,
           });
+          console.log("📩 Emit chat:new ke FE:", content);
+        }
 
-          if (io) {
-            io.to(this.userId.toString()).emit("chat:new", {
-              ...(chat.toObject?.() ?? {
-                userId: this.userId,
-                waNumber,
-                message: content,
-                direction: "in",
-                read: false,
-              }),
-              waName: contact?.name || m.pushName || waNumber,
-            });
-          }
+        // ====== Auto kirim read receipt ke WA (biar di HP target jadi centang 2 biru)
+        try {
+          await this.sock.readMessages([m.key]);
+          await Chat.updateMany(
+            {
+              userId: this.userId,
+              waNumber,
+              direction: "in",
+              read: false,
+            },
+            { $set: { read: true } }
+          );
+        } catch (err) {
+          console.warn("⚠️ gagal auto-read:", err.message);
         }
       } catch (err) {
         logger.error({ err: String(err) }, "WA messages.upsert error");
@@ -276,7 +318,25 @@ class SingleWASession extends EventEmitter {
             }
           );
 
-          // Cari logId untuk fallback emit ke FE
+          // ✅ Update juga ke Chat agar status & read-nya persist
+          const chatUpdate = {
+            $set: {
+              status: newStatus,
+              [`timestamps.${newStatus}At`]: new Date(),
+            },
+          };
+
+          // tambahkan flag read true kalau statusnya read / played
+          if (newStatus === "read" || newStatus === "played") {
+            chatUpdate.$set.read = true;
+          }
+
+          await Chat.updateMany(
+            { userId: this.userId, providerId: waMsgId },
+            chatUpdate
+          );
+
+          // ... sisanya tetap (emit ke FE, log, dll)
           const logDoc = await MessageLog.findOne(
             { userId: this.userId, providerId: waMsgId },
             { _id: 1 }
@@ -295,14 +355,10 @@ class SingleWASession extends EventEmitter {
           }
 
           if (io) {
-            console.log("🔥 Emit message:status", {
-              providerId: waMsgId,
-              logId: logDoc?._id,
-              status: newStatus,
-              phone,
-              name,
-              blastId: blastDoc?._id,
-            });
+            console.log(
+              `🔥 Emit message:status to room=${this.userId.toString()} | status=${newStatus} | phone=${phone} | providerId=${waMsgId}`
+            );
+
             io.to(this.userId.toString()).emit("message:status", {
               providerId: waMsgId,
               logId: logDoc?._id,
@@ -339,6 +395,17 @@ class SingleWASession extends EventEmitter {
 
           // Update MessageLog
           await MessageLog.updateOne(
+            { userId: this.userId, providerId: waMsgId },
+            {
+              $set: {
+                status: "read",
+                "timestamps.readAt": new Date(),
+              },
+            }
+          );
+
+          // ✅ Update juga ke Chat agar status read/played tetap setelah refresh
+          await Chat.updateMany(
             { userId: this.userId, providerId: waMsgId },
             {
               $set: {
@@ -441,14 +508,19 @@ class SingleWASession extends EventEmitter {
     const sent = await this.sock.sendMessage(jidFromPhone(to), { text });
     const providerId = sent?.key?.id || null;
 
-    await Chat.create({
-      userId: this.userId,
-      waNumber: to,
-      message: text,
-      direction: "out",
-      read: true,
-      assignedTo: this.userId,
-    });
+    // 🚫 jangan insert ke DB di sini, cukup emit ke FE
+    if (io) {
+      io.to(this.userId.toString()).emit("chat:new", {
+        waNumber: to,
+        message: text,
+        direction: "out",
+        read: true,
+        providerId,
+        status: "pending",
+        createdAt: new Date(),
+      });
+    }
+
 
     // 🔥 update log + blast kalau ada ID
     if (logId) {
@@ -496,7 +568,7 @@ class SingleWASession extends EventEmitter {
   }
 
   /**
-   * Kirim media
+   * Kirim media (gambar, video, dokumen, audio)
    * @param {string} to
    * @param {Buffer} fileBuf
    * @param {string} mimetype
@@ -507,9 +579,13 @@ class SingleWASession extends EventEmitter {
   async sendMedia(to, fileBuf, mimetype, filename, caption = "", opts = {}) {
     const { blastId, logId } = opts;
 
+    // ==========================
+    // 🧪 Mode simulasi
+    // ==========================
     if (cfg.simulation) {
       const providerId = "sim_" + Math.random().toString(36).slice(2);
 
+      // Simulasi boleh simpan ke DB karena gak ada event update dari WA
       await Chat.create({
         userId: this.userId,
         waNumber: to,
@@ -517,6 +593,7 @@ class SingleWASession extends EventEmitter {
         direction: "out",
         read: true,
         assignedTo: this.userId,
+        status: "sent",
       });
 
       if (io) {
@@ -526,16 +603,20 @@ class SingleWASession extends EventEmitter {
           direction: "out",
           read: true,
           providerId,
-          status: "pending",        // ✅ default pending
-          createdAt: new Date(),    // ✅ biar FE tampil timestamp
+          status: "sent",
+          createdAt: new Date(),
         });
       }
       return { providerId };
     }
 
+    // ==========================
+    // 🚀 Kirim ke WhatsApp asli
+    // ==========================
     if (!this.sock) throw new Error("WA not initialized (session missing)");
 
     const optsMsg = {};
+
     if (/^image\//i.test(mimetype)) {
       optsMsg.image = fileBuf;
     } else if (/^video\//i.test(mimetype)) {
@@ -549,34 +630,42 @@ class SingleWASession extends EventEmitter {
       optsMsg.mimetype = mimetype;
       optsMsg.fileName = filename || "file";
     }
+
     if (caption) optsMsg.caption = caption;
 
+    // kirim pesan ke WA
     const sent = await this.sock.sendMessage(jidFromPhone(to), optsMsg);
     const providerId = sent?.key?.id || null;
 
-    await Chat.create({
-      userId: this.userId,
-      waNumber: to,
-      message: caption || "[Media]",
-      direction: "out",
-      read: true,
-      assignedTo: this.userId,
-    });
-
-    // 🔥 update log & blast langsung jadi "sent"
-    if (logId) {
-      const update = {
-        $set: {
-          providerId,                     // ✅ simpan providerId
-          "timestamps.sentAt": new Date(),
-        },
-      };
-
-      update.$set.status = "sent";
-
-      await MessageLog.updateOne({ _id: logId }, update);
+    // 🚫 Jangan insert langsung ke DB, biar messages.update yang update
+    // cukup emit ke FE agar realtime
+    if (io) {
+      io.to(this.userId.toString()).emit("chat:new", {
+        waNumber: to,
+        message: caption || "[Media]",
+        direction: "out",
+        read: true,
+        providerId,
+        status: "pending", // awalnya pending, nanti di-update oleh messages.update
+        createdAt: new Date(),
+      });
     }
 
+    // ==========================
+    // 🔥 Update MessageLog & Blast
+    // ==========================
+    if (logId) {
+      await MessageLog.updateOne(
+        { _id: logId },
+        {
+          $set: {
+            providerId,
+            status: "sent",
+            "timestamps.sentAt": new Date(),
+          },
+        }
+      );
+    }
 
     if (blastId) {
       await Blast.updateOne(
@@ -587,26 +676,11 @@ class SingleWASession extends EventEmitter {
             "recipients.$.waMsgId": providerId,
             "recipients.$.timestamps.sentAt": new Date(),
           },
-          // $inc: { "totals.sent": 1 },
         }
       );
     }
-
-    if (io) {
-      io.to(this.userId.toString()).emit("chat:new", {
-        waNumber: to,
-        message: caption || "[Media]",
-        direction: "out",
-        read: true,
-        providerId,
-        status: "pending",        // ✅ awalnya pending
-        createdAt: new Date(),    // ✅ FE butuh timestamp
-      });
-    }
-
     return { providerId };
   }
-
 }
 
 /**

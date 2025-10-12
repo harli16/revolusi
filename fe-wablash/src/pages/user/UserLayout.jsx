@@ -99,7 +99,7 @@ export default function UserLayout() {
     fetchStatus();
 
     // ✅ join socket room
-    socket.emit("join", user?.id);
+    // socket.emit("join", user?.id);
 
     // ✅ listen event QR & ready
     socket.on("wa:qr", () => {
