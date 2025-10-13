@@ -793,6 +793,74 @@ async function processJob(job) {
   }
 }
 
+// ===============================
+// 🔧 ADMIN HELPER UNTUK MONITORING DAN KONTROL
+// ===============================
+const queues = new Map(); // optional: nanti bisa diisi dari queue.js kalau sudah pakai sistem antrian global
+const _queueDepth = new Map(); // userId -> jumlah job di antrian
+
+/**
+ * Catatan: panggil setQueueDepth(userId, n)
+ * di tempat yang enqueue job (biasanya di services/queue.js)
+ */
+function setQueueDepth(userId, n) {
+  _queueDepth.set(String(userId), n);
+}
+function getQueueDepth(userId) {
+  return _queueDepth.get(String(userId)) || 0;
+}
+
+/**
+ * Pause/Resume queue per user
+ * Catatan: implementasi queue lo sekarang masih di file lain,
+ * jadi ini sementara dummy hook aja, nanti bisa disambung ke service queue.js
+ */
+function pauseQueue(userId) {
+  const q = queues.get(String(userId));
+  if (q) q.paused = true;
+  console.log(`⏸️ Queue paused for user ${userId}`);
+}
+function resumeQueue(userId) {
+  const q = queues.get(String(userId));
+  if (q) q.paused = false;
+  console.log(`▶️ Queue resumed for user ${userId}`);
+}
+
+/**
+ * Force logout sesi WA user (hapus auth + disconnect)
+ */
+async function forceLogout(userId) {
+  const key = String(userId);
+  const s = sessions.get(key);
+  if (s?.sock?.logout) {
+    try {
+      await s.sock.logout();
+      console.log(`🚪 WA logout success for user ${userId}`);
+    } catch (err) {
+      console.warn(`⚠️ WA logout failed for user ${userId}: ${err.message}`);
+    }
+  }
+
+  // hapus folder token biar QR baru nanti muncul
+  try {
+    const tokensDir = cfg.tokensDir || "./tokens";
+    const authDir = path.join(tokensDir, key, "baileys_auth");
+    fs.rmSync(authDir, { recursive: true, force: true });
+    console.log(`🧹 Deleted old session folder for user ${userId}`);
+  } catch (err) {
+    console.warn(`⚠️ Failed to remove auth folder for ${userId}: ${err.message}`);
+  }
+
+  // ubah state jadi disconnected
+  const sess = sessions.get(key);
+  if (sess) {
+    sess.state = "DISCONNECTED";
+    sess.qrPng = null;
+    sess.qrAt = 0;
+    sess.registered = false;
+  }
+}
+
 /**
  * ====== KOMPATIBILITAS SEMENTARA (fungsi tanpa userId) ======
  * Route lama / tools lama bisa tetap jalan untuk 1 user default.
@@ -813,7 +881,7 @@ async function _compat_reset() {
 module.exports = {
   // Manager API (pakai ini di kode baru)
   setSocketIO,
-  setOwnerUser, // opsional default user
+  setOwnerUser,
   startSession,
   getSession,
   isConnected,
@@ -824,7 +892,15 @@ module.exports = {
   reset,
   sendText,
   sendMedia,
-  processJob, // 👉 panggil ini dari worker queue lo
+  processJob,
+
+  // Admin helpers
+  setQueueDepth,
+  getQueueDepth,
+  pauseQueue,
+  resumeQueue,
+  forceLogout,
+
 
   // Kompat lama
   init: _compat_init,
