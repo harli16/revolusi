@@ -3,6 +3,7 @@ const router = express.Router();
 
 const User = require("../models/User");
 const { signJwt } = require("../lib/jwt");
+const { logActivity } = require("../services/activityLogger"); // 🆕 Tambahan logger
 
 // Helper bikin URL foto absolute
 const makePhotoUrl = (req, photoPath) => {
@@ -50,6 +51,9 @@ router.post("/login", async (req, res) => {
     user.isOnline = true;
     user.lastActive = new Date();
     await user.save();
+
+    // 📝 Catat aktivitas login
+    await logActivity(user._id, "LOGIN", { ip: req.ip });
 
     // ✅ Konsisten pakai "id" untuk JWT payload
     const token = signJwt({
@@ -99,6 +103,9 @@ router.post("/logout", async (req, res) => {
     user.lastActive = new Date();
     await user.save();
 
+    // 📝 Catat aktivitas logout
+    await logActivity(user._id, "LOGOUT", { message: "User logged out" });
+
     res.json({
       ok: true,
       message: "Logout successful",
@@ -143,6 +150,9 @@ router.post("/register", async (req, res) => {
       password,
       role || "admin"
     );
+
+    // 📝 Catat aktivitas register
+    await logActivity(created._id, "REGISTER", { username: created.username });
 
     res.json({
       ok: true,

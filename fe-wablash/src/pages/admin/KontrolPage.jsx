@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
-import api from "../../utils/api";
-import { useAuth } from "../../context/AuthContext";
+// src/pages/admin/KontrolPage.jsx
+import React, { useEffect, useState } from "react";
 import {
   LogOut,
   SlidersHorizontal,
@@ -9,25 +8,36 @@ import {
   Wifi,
   Clock,
   X,
+  Users,
+  Activity,
+  UserX,
+  CheckCircle2,
 } from "lucide-react";
+import api from "../../utils/api";
+import { useAuth } from "../../context/AuthContext";
 
 // ===== Modal Set Kuota =====
 function QuotaModal({ open, onClose, user, onSubmit }) {
   const [value, setValue] = useState(user?.quotaDaily || 0);
 
+  useEffect(() => {
+    if (user) setValue(user.quotaDaily);
+  }, [user]);
+
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md animate-[fadeIn_.25s_ease]">
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md animate-fade-in">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b bg-gray-50 rounded-t-2xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-gray-50 rounded-t-2xl">
           <h3 className="text-lg font-semibold text-gray-800">
-            Set Kuota Harian — {user?.username}
+            Atur Kuota Harian —{" "}
+            <span className="text-indigo-600">{user?.username}</span>
           </h3>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-gray-200 transition"
+            className="p-2 rounded-full hover:bg-gray-200 transition"
           >
             <X size={18} />
           </button>
@@ -36,10 +46,11 @@ function QuotaModal({ open, onClose, user, onSubmit }) {
         {/* Body */}
         <div className="p-6 space-y-4">
           <p className="text-sm text-gray-600">
-            Tentukan jumlah maksimum pesan yang boleh dikirim user ini per hari.
+            Tentukan jumlah maksimum pesan yang boleh dikirim oleh user ini per
+            hari.
             <br />
             <span className="text-xs text-gray-400">
-              (Masukkan <strong>0</strong> untuk <em>Unlimited</em>)
+              Masukkan <strong>0</strong> untuk <em>unlimited</em>.
             </span>
           </p>
 
@@ -48,21 +59,21 @@ function QuotaModal({ open, onClose, user, onSubmit }) {
             value={value}
             onChange={(e) => setValue(Number(e.target.value))}
             placeholder="Masukkan angka kuota"
-            className="w-full border border-gray-300 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+            className="w-full text-lg border border-gray-300 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
           />
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-3 px-6 py-4 border-t bg-gray-50 rounded-b-2xl">
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-gray-600 hover:text-gray-800 transition"
+            className="px-5 py-2.5 text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-100 transition font-semibold"
           >
             Batal
           </button>
           <button
             onClick={() => onSubmit(value)}
-            className="px-5 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition"
+            className="px-6 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition shadow-sm"
           >
             Simpan
           </button>
@@ -81,6 +92,7 @@ export default function KontrolPage() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [openQuotaModal, setOpenQuotaModal] = useState(false);
 
+  // === Ambil data user dari API
   const fetchUsers = async () => {
     try {
       const res = await api.get("/api/admin/stats", {
@@ -132,171 +144,223 @@ export default function KontrolPage() {
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64 text-gray-500">
+      <div className="flex justify-center items-center h-96 text-gray-500 bg-gray-50">
         Memuat data pengguna...
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <h3 className="text-2xl font-bold text-gray-800">Kontrol Sistem</h3>
-        <button
-          onClick={() => {
-            setRefreshing(true);
-            fetchUsers();
-          }}
-          className={`flex items-center gap-2 text-sm px-4 py-2 rounded-xl transition font-medium shadow-sm ${
-            refreshing
-              ? "bg-gray-200 text-gray-600"
-              : "bg-indigo-600 text-white hover:bg-indigo-700"
-          }`}
-        >
-          <RefreshCcw size={16} className={refreshing ? "animate-spin" : ""} />
-          {refreshing ? "Refreshing..." : "Refresh"}
-        </button>
-      </div>
+    <div className="p-4 md:p-8 bg-gray-50 min-h-screen">
+      <div className="max-w-7xl mx-auto space-y-8">
+        {/* Header */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">
+              Kontrol Sistem
+            </h1>
+            <p className="text-gray-600 mt-1">
+              Monitor dan kelola semua pengguna aktif.
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              setRefreshing(true);
+              fetchUsers();
+            }}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold shadow-sm border border-gray-300 bg-white hover:bg-gray-100 text-gray-800 transition disabled:opacity-70"
+          >
+            <RefreshCcw
+              size={16}
+              className={refreshing ? "animate-spin text-indigo-500" : ""}
+            />
+            {refreshing ? "Memuat..." : "Refresh Data"}
+          </button>
+        </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <SummaryCard label="Total User" value={users.length} color="indigo" />
-        <SummaryCard
-          label="WA Connected"
-          value={users.filter((u) => u.waStatus === "CONNECTED").length}
-          color="green"
-        />
-        <SummaryCard
-          label="Queue Aktif"
-          value={users.reduce((acc, u) => acc + (u.queueDepth || 0), 0)}
-          color="yellow"
-        />
-        <SummaryCard
-          label="User Nonaktif"
-          value={users.filter((u) => !u.active).length}
-          color="red"
-        />
-      </div>
+        {/* Summary Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          <SummaryCard
+            icon={Users}
+            label="Total Pengguna"
+            value={users.length}
+            color="indigo"
+          />
+          <SummaryCard
+            icon={CheckCircle2}
+            label="WA Terhubung"
+            value={users.filter((u) => u.waStatus === "CONNECTED").length}
+            color="green"
+          />
+          <SummaryCard
+            icon={Activity}
+            label="Antrian Aktif"
+            value={users.reduce((acc, u) => acc + (u.queueDepth || 0), 0)}
+            color="amber"
+          />
+          <SummaryCard
+            icon={UserX}
+            label="User Nonaktif"
+            value={users.filter((u) => !u.active).length}
+            color="rose"
+          />
+        </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-2xl shadow border border-gray-100 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 border-b">
-            <tr className="text-gray-700 text-left">
-              <th className="py-3 px-4">User</th>
-              <th>Status WA</th>
-              <th>Queue</th>
-              <th>Kuota</th>
-              <th>Aktif</th>
-              <th className="text-center">Aksi</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => (
-              <tr
-                key={u._id}
-                className="border-b hover:bg-gray-50 transition-colors"
-              >
-                <td className="py-3 px-4 font-medium text-gray-800">
-                  {u.username}
-                </td>
-
-                <td className="px-2">
-                  <span
-                    className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold w-fit ${
-                      u.waStatus === "CONNECTED"
-                        ? "bg-green-100 text-green-700"
-                        : u.waStatus === "QR_READY"
-                        ? "bg-yellow-100 text-yellow-700"
-                        : "bg-gray-100 text-gray-600"
-                    }`}
-                  >
-                    {u.waStatus === "CONNECTED" ? (
-                      <Wifi size={14} />
-                    ) : u.waStatus === "QR_READY" ? (
-                      <Clock size={14} />
-                    ) : (
-                      <WifiOff size={14} />
-                    )}
-                    {u.waStatus}
-                  </span>
-                </td>
-
-                <td className="px-2 text-center">
-                  {u.queueDepth > 0 ? (
-                    <span className="text-yellow-700 font-semibold">
-                      {u.queueDepth} aktif
-                    </span>
-                  ) : (
-                    <span className="text-gray-400">0 (kosong)</span>
-                  )}
-                </td>
-
-                <td className="px-2 text-center">
-                  <span
-                    className={`${
-                      u.quotaDaily === 0
-                        ? "text-gray-400 italic"
-                        : "text-indigo-700 font-semibold"
-                    }`}
-                  >
-                    {u.quotaDaily === 0 ? "Unlimited" : u.quotaDaily}
-                  </span>
-                </td>
-
-                <td className="px-2 text-center">
-                  {u.active ? "✅" : "❌"}
-                </td>
-
-                <td className="px-2 py-2">
-                  <div className="flex items-center justify-center gap-2">
-                    <button
-                      onClick={() =>
-                        action(
-                          `/api/admin/users/${u._id}/wa/logout`,
-                          "WA session user di-reset (logout)"
-                        )
-                      }
-                      title="Reset / Logout WA"
-                      className="p-2 rounded-lg bg-red-100 hover:bg-red-200 transition"
-                    >
-                      <LogOut size={16} className="text-red-700" />
-                    </button>
-                    <button
-                      onClick={() => handleSetQuota(u)}
-                      title="Set Kuota Harian"
-                      className="p-2 rounded-lg bg-indigo-100 hover:bg-indigo-200 transition"
-                    >
-                      <SlidersHorizontal size={16} className="text-indigo-700" />
-                    </button>
-                  </div>
-                </td>
+        {/* Table */}
+        <div className="bg-white rounded-2xl shadow-md border border-gray-200 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-100 border-b border-gray-200">
+              <tr className="text-gray-600 text-left uppercase text-xs">
+                <th className="py-3.5 px-5 font-semibold">User</th>
+                <th className="py-3.5 px-3 font-semibold">Status WA</th>
+                <th className="py-3.5 px-3 font-semibold">Antrian</th>
+                <th className="py-3.5 px-3 font-semibold">Kuota Harian</th>
+                <th className="py-3.5 px-3 font-semibold">Status Akun</th>
+                <th className="py-3.5 px-5 font-semibold text-center">Aksi</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {users.map((u) => (
+                <tr
+                  key={u._id}
+                  className="hover:bg-gray-50 transition-colors duration-150"
+                >
+                  <td className="py-4 px-5 font-medium text-gray-800">
+                    {u.username}
+                  </td>
+                  <td className="px-3">
+                    <StatusWBadge status={u.waStatus} />
+                  </td>
+                  <td className="px-3 font-medium text-gray-700">
+                    {u.queueDepth > 0 ? (
+                      <span className="text-amber-700">
+                        {u.queueDepth} pesan
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">Kosong</span>
+                    )}
+                  </td>
+                  <td className="px-3 font-medium text-gray-700">
+                    {u.quotaDaily === 0 ? (
+                      <span className="text-gray-400 italic">Unlimited</span>
+                    ) : (
+                      <span className="text-indigo-700 font-semibold">
+                        {u.quotaDaily}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3">
+                    {u.active ? (
+                      <span className="text-green-600 font-semibold">
+                        Aktif
+                      </span>
+                    ) : (
+                      <span className="text-rose-600 font-semibold">
+                        Nonaktif
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center justify-center gap-2">
+                      <ActionButton
+                        icon={LogOut}
+                        title="Reset / Logout WA"
+                        onClick={() =>
+                          action(
+                            `/api/admin/users/${u._id}/wa/logout`,
+                            "WA session user direset"
+                          )
+                        }
+                        variant="danger"
+                      />
+                      <ActionButton
+                        icon={SlidersHorizontal}
+                        title="Set Kuota Harian"
+                        onClick={() => handleSetQuota(u)}
+                        variant="primary"
+                      />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
-      {/* Modal Set Kuota */}
-      <QuotaModal
-        open={openQuotaModal}
-        onClose={() => setOpenQuotaModal(false)}
-        user={selectedUser}
-        onSubmit={handleSubmitQuota}
-      />
+        {/* Modal Kuota */}
+        <QuotaModal
+          open={openQuotaModal}
+          onClose={() => setOpenQuotaModal(false)}
+          user={selectedUser}
+          onSubmit={handleSubmitQuota}
+        />
+      </div>
     </div>
   );
 }
 
 // ===== Komponen kecil =====
-function SummaryCard({ label, value, color }) {
+function SummaryCard({ icon: Icon, label, value, color }) {
+  const colorMap = {
+    indigo: "bg-indigo-50 text-indigo-700 border-indigo-200",
+    green: "bg-green-50 text-green-700 border-green-200",
+    amber: "bg-amber-50 text-amber-700 border-amber-200",
+    rose: "bg-rose-50 text-rose-700 border-rose-200",
+  };
   return (
     <div
-      className={`bg-${color}-50 border border-${color}-100 p-4 rounded-xl shadow-sm text-center`}
+      className={`bg-white border p-5 rounded-2xl shadow-sm flex flex-col justify-between hover:shadow-md transition ${colorMap[color]}`}
     >
-      <p className="text-gray-500 text-sm">{label}</p>
-      <p className={`text-2xl font-bold text-${color}-700 mt-1`}>{value}</p>
+      <div className="flex items-center gap-3 mb-2">
+        <div
+          className={`p-2.5 rounded-full bg-opacity-20 ${
+            colorMap[color].split(" ")[0]
+          }`}
+        >
+          <Icon size={22} />
+        </div>
+        <p className="text-sm font-medium opacity-80">{label}</p>
+      </div>
+      <p className="text-3xl font-bold">{value}</p>
     </div>
+  );
+}
+
+function StatusWBadge({ status }) {
+  const base =
+    "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold w-fit";
+  if (status === "CONNECTED")
+    return (
+      <span className={`${base} bg-green-100 text-green-700`}>
+        <Wifi size={14} /> Terhubung
+      </span>
+    );
+  if (status === "QR_READY")
+    return (
+      <span className={`${base} bg-amber-100 text-amber-700`}>
+        <Clock size={14} /> Butuh QR
+      </span>
+    );
+  return (
+    <span className={`${base} bg-gray-100 text-gray-600`}>
+      <WifiOff size={14} /> Terputus
+    </span>
+  );
+}
+
+function ActionButton({ icon: Icon, title, onClick, variant }) {
+  const variants = {
+    primary: "bg-indigo-100 hover:bg-indigo-200 text-indigo-700",
+    danger: "bg-rose-100 hover:bg-rose-200 text-rose-700",
+  };
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`p-2.5 rounded-lg transition ${variants[variant]} hover:scale-105`}
+    >
+      <Icon size={16} />
+    </button>
   );
 }

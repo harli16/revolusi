@@ -102,9 +102,18 @@ app.use("/api/profile", profileRoutes);
 app.use("/api/blasts", require("./routes/blasts"));
 app.use("/api/stats", require("./routes/stats"));
 app.use("/api/contacts", contactsRoutes);
-
-// 🔥 Tambahin route upload
 app.use("/api/upload", require("./routes/upload"));
+
+// ==========================
+// 🔥 Tambahan baru: adminLogs
+// ==========================
+try {
+  const adminLogsRoutes = require("./routes/adminLogs");
+  app.use("/api/admin", adminLogsRoutes);
+  console.log("✅ Route adminLogs terpasang di /api/admin");
+} catch (err) {
+  console.warn("⚠️ Route adminLogs tidak ditemukan atau error:", err.message);
+}
 
 // ==========================
 // 404 handler

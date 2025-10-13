@@ -1,11 +1,14 @@
+// src/App.jsx
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 import { BlastProvider } from "./context/BlastContext";
 
 import Login from "./pages/Login";
-import AdminDashboard from "./pages/admin/AdminDashboard";
 
-// layout & pages user
+// === Layout dan halaman admin ===
+import AdminDashboard from "./pages/admin/AdminDashboard"; // ini adalah layout utama admin
+
+// === Layout & halaman user ===
 import UserLayout from "./pages/user/UserLayout";
 import Dashboard from "./pages/user/Dashboard";
 import KirimPesan from "./pages/user/KirimPesan";
@@ -21,25 +24,24 @@ export default function App() {
   const { user } = useAuth();
 
   return (
-    // Bungkus semua Routes dengan BlastProvider
     <BlastProvider>
       <Routes>
-        {/* login */}
+        {/* Login Page */}
         <Route path="/login" element={<Login />} />
 
-        {/* admin */}
+        {/* === ADMIN AREA === */}
         <Route
           path="/admin/*"
           element={
             user?.role === "admin" ? (
-              <AdminDashboard />
+              <AdminDashboard /> // ✅ ini handle semua halaman admin
             ) : (
               <Navigate to="/login" replace />
             )
           }
         />
 
-        {/* user */}
+        {/* === USER AREA === */}
         <Route
           path="/user/*"
           element={
@@ -50,7 +52,6 @@ export default function App() {
             )
           }
         >
-          {/* index = default /user → dashboard */}
           <Route index element={<Dashboard />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="kirim-pesan" element={<KirimPesan />} />
