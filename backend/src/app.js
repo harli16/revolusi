@@ -96,6 +96,7 @@ app.use("/api/users", require("./routes/users"));
 app.use("/api/wa", require("./routes/wa"));
 app.use("/api/message", require("./routes/message"));
 app.use("/api/logs", require("./routes/logs"));
+app.use("/api/admin", require("./routes/admin"));
 app.use("/api/templates", templateRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/blasts", require("./routes/blasts"));

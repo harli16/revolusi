@@ -1,13 +1,17 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
 const schema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    userId: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "User", 
+      required: true 
+    },
 
-    // Nomor tujuan
+    // Nomor tujuan (WA)
     to: { type: String, required: true },
 
-    // Nama penerima (opsional, dari excel/csv)
+    // Nama penerima (opsional, dari Excel/CSV)
     recipientName: { type: String },
 
     // Isi pesan teks
@@ -20,15 +24,15 @@ const schema = new mongoose.Schema(
     status: {
       type: String,
       enum: [
-        'queued',     // baru dimasukin ke antrian
-        'pending',    // siap dikirim (belum ada response WA)
-        'sent',       // sudah terkirim ke server WA
-        'delivered',  // sudah diterima device penerima
-        'read',       // sudah dibaca penerima
-        'played',     // kalau voice note / audio sudah diputar
-        'failed'      // gagal kirim
+        "queued",     // baru dimasukin ke antrian
+        "pending",    // siap dikirim (belum ada response WA)
+        "sent",       // sudah terkirim ke server WA
+        "delivered",  // sudah diterima device penerima
+        "read",       // sudah dibaca penerima
+        "played",     // kalau voice note / audio sudah diputar
+        "failed",     // gagal kirim
       ],
-      default: 'queued',
+      default: "queued",
     },
 
     // ID dari provider (misalnya WhatsApp msgId)
@@ -40,4 +44,12 @@ const schema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('MessageLog', schema);
+/**
+ * 🔍 Indexes untuk performa query
+ * - kombinasi userId + status + createdAt: cepat untuk statistik & dashboard
+ * - index createdAt: cepat untuk sort & filter tanggal
+ */
+schema.index({ userId: 1, status: 1, createdAt: -1 });
+schema.index({ createdAt: -1 });
+
+module.exports = mongoose.model("MessageLog", schema);
