@@ -507,6 +507,36 @@ router.post("/", authenticateToken, async (req, res) => {
           filename: content.mediaUrl,
           caption: msg, // 🔥 caption ikut hasil random template
         });
+        // ===========================
+        // 💬 Simpan ke koleksi Chat (biar muncul di Live Chat user)
+        // ===========================
+        try {
+          const Chat = require("../models/Chat");
+          await Chat.create({
+            userId: req.user.id,
+            waNumber: rec.phone,
+            message: msg,
+            direction: "out",
+            read: true, // karena dikirim sendiri
+            assignedTo: req.user.id,
+            createdAt: new Date(),
+          });
+
+          // 🔥 Emit ke socket Live Chat user biar realtime juga
+          const io = req.app.get("io");
+          if (io) {
+            io.to(String(req.user.id)).emit("chat:new", {
+              waNumber: rec.phone,
+              message: msg,
+              direction: "out",
+              fromSelf: true,
+              createdAt: new Date(),
+              status: "sent",
+            });
+          }
+        } catch (err) {
+          console.error("❌ Gagal insert Chat dari blast:", err.message);
+        }
       } else {
         // === Kirim Pesan Teks ===
         queue.addJob({
@@ -514,8 +544,37 @@ router.post("/", authenticateToken, async (req, res) => {
           type: "text",
           message: msg, // 🔥 isi pesan hasil random template
         });
-      }
 
+        // ===========================
+        // 💬 Simpan ke koleksi Chat (biar muncul di Live Chat user)
+        // ===========================
+        try {
+          const Chat = require("../models/Chat");
+          await Chat.create({
+            userId: req.user.id,
+            waNumber: rec.phone,
+            message: msg,
+            direction: "out",
+            read: true,
+            assignedTo: req.user.id,
+            createdAt: new Date(),
+          });
+
+          const io = req.app.get("io");
+          if (io) {
+            io.to(String(req.user.id)).emit("chat:new", {
+              waNumber: rec.phone,
+              message: msg,
+              direction: "out",
+              fromSelf: true,
+              createdAt: new Date(),
+              status: "sent",
+            });
+          }
+        } catch (err) {
+          console.error("❌ Gagal insert Chat dari blast:", err.message);
+        }
+      }
       // 🔍 Optional log untuk debug
       console.log(
         `📨 [QUEUE ADD] to=${rec.phone}, mode=${req.body?.randomMode}, templatePreview="${msg.slice(0, 50)}..."`

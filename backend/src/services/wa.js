@@ -261,7 +261,6 @@ class SingleWASession extends EventEmitter {
 
         // ====== Auto kirim read receipt ke WA (biar di HP target jadi centang 2 biru)
         try {
-          await this.sock.readMessages([m.key]);
           await Chat.updateMany(
             {
               userId: this.userId,
