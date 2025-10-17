@@ -1,18 +1,24 @@
 import axios from "axios";
 
-// bikin instance axios dengan baseURL dari .env FE
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL, // otomatis pakai VITE_API_URL dari .env
+  baseURL: import.meta.env.VITE_API_URL, // contoh: http://10.10.30.13:3001
   withCredentials: false,
 });
 
-// ✅ Interceptor untuk otomatis tambah Authorization header
+// ✅ Interceptor: auto tambah Bearer token + pastikan prefix /api
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem("token"); // ambil token login dari localStorage
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`; // tambahkan ke setiap request
+    const token = localStorage.getItem("token");
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+
+    // ⛑️ Safety net: kalau URL diawali "/" tapi belum pakai "/api/",
+    // kita tambahkan "/api" supaya gak kejadian /chat/unread → 404 lagi.
+    if (typeof config.url === "string") {
+      if (config.url.startsWith("/") && !config.url.startsWith("/api/")) {
+        config.url = `/api${config.url}`;
+      }
     }
+
     return config;
   },
   (error) => Promise.reject(error)
